@@ -88,6 +88,10 @@ HalFile HalStorage::open(const char* path, const oflag_t oflag) {
 
 bool HalStorage::mkdir(const char* path, const bool pFlag) { HAL_STORAGE_WRAPPED_CALL(mkdir, path, pFlag); }
 
+uint64_t HalStorage::totalBytes() { HAL_STORAGE_WRAPPED_CALL(sdTotalBytes); }
+
+uint64_t HalStorage::usedBytes() { HAL_STORAGE_WRAPPED_CALL(sdUsedBytes); }
+
 bool HalStorage::exists(const char* path) { HAL_STORAGE_WRAPPED_CALL(exists, path); }
 
 bool HalStorage::remove(const char* path) { HAL_STORAGE_WRAPPED_CALL(remove, path); }

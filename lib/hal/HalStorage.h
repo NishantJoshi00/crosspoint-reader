@@ -30,6 +30,11 @@ class HalStorage {
   // Ensure a directory exists, creating it if necessary. Returns true on success.
   bool ensureDirectoryExists(const char* path);
 
+  // Card capacity/usage in bytes (0 when not mounted). Wraps the SDK's cached
+  // values under the storage mutex; usedBytes() may scan the FAT on first call.
+  uint64_t totalBytes();
+  uint64_t usedBytes();
+
   HalFile open(const char* path, const oflag_t oflag = O_RDONLY);
   bool mkdir(const char* path, const bool pFlag = true);
   bool exists(const char* path);

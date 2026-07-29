@@ -34,6 +34,7 @@
 #include "images/LoadingIcon.h"
 #include "util/ButtonNavigator.h"
 #include "util/ScreenshotUtil.h"
+#include "util/SystemReport.h"
 
 GfxRenderer renderer(display);
 MappedInputManager mappedInputManager(gpio, renderer);
@@ -305,6 +306,9 @@ void setup() {
   }
 
   HalSystem::checkPanic();
+
+  // One-shot hardware analysis: only runs when /.sys.txt is absent.
+  SystemReport::writeIfMissing();
 
   SETTINGS.loadFromFile();
   APP_STATE.loadFromFile();
