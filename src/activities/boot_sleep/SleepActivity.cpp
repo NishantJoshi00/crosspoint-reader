@@ -29,6 +29,12 @@ void SleepActivity::onEnter() {
     return renderLastScreenSleepScreen();
   }
 
+  // Sleeping while a saved QR code is on screen: keep it displayed with the
+  // moon icon, regardless of the configured sleep screen.
+  if (!APP_STATE.sleepQrName.empty()) {
+    return renderLastScreenSleepScreen();
+  }
+
   // Show popup with reader orientation only when going to sleep from reader
   if (APP_STATE.lastSleepFromReader) {
     ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);

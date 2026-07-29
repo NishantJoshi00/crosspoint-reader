@@ -48,6 +48,9 @@ class Activity {
   virtual bool handleForcedRefresh() { return false; }
   virtual bool isHomeActivity() const { return false; }
   virtual bool handleHomeGesture() { return false; }
+  // Name of the QR code this activity is displaying, or nullptr. Non-null
+  // makes deep sleep keep the current screen and wake resume into the code.
+  virtual const char* qrSleepName() const { return nullptr; }
   virtual ScreenshotInfo getScreenshotInfo() const { return {}; }
 
   // Start a new activity without destroying the current one
