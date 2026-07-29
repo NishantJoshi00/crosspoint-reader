@@ -193,6 +193,25 @@ static bool loadSleepFrameBuffer() {
   return true;
 }
 
+// Decider for the phase-2 boot animation, keyed on the type of the last
+// sleep. A quick-resume sleep (including a QR code left on the panel) wakes
+// straight back into the previous screen, so the handoff is redundant; every
+// real sleep screen gets the full animation.
+static bool shouldPlayBootAnimation() {
+  switch (static_cast<CrossPointSettings::SLEEP_SCREEN_MODE>(APP_STATE.lastSleepScreen)) {
+    case CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME:
+      return false;
+    case CrossPointSettings::SLEEP_SCREEN_MODE::DARK:
+    case CrossPointSettings::SLEEP_SCREEN_MODE::LIGHT:
+    case CrossPointSettings::SLEEP_SCREEN_MODE::CUSTOM:
+    case CrossPointSettings::SLEEP_SCREEN_MODE::COVER:
+    case CrossPointSettings::SLEEP_SCREEN_MODE::COVER_CUSTOM:
+    case CrossPointSettings::SLEEP_SCREEN_MODE::BLANK:
+    default:
+      return true;
+  }
+}
+
 // Enter deep sleep mode
 void enterDeepSleep(bool fromTimeout = false) {
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
@@ -205,6 +224,9 @@ void enterDeepSleep(bool fromTimeout = false) {
       (fromTimeout &&
        SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
   APP_STATE.showBootScreen = !isQuickResumeSleep;
+  APP_STATE.lastSleepScreen = (qrName != nullptr || isQuickResumeSleep)
+                                  ? CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME
+                                  : SETTINGS.sleepScreen;
 
   APP_STATE.saveToFile();
 
@@ -411,7 +433,8 @@ void setup() {
 
   // Phase-2 boot logo: rotate the hexagram in over the splash just before the
   // screen is handed to the first real activity.
-  if (resume == BootResume::Splash && !recoveryFirmwareMode && !HalSystem::isRebootFromPanic()) {
+  if (resume == BootResume::Splash && !recoveryFirmwareMode && !HalSystem::isRebootFromPanic() &&
+      shouldPlayBootAnimation()) {
     BootActivity::playHandoffAnimation(renderer);
   }
 

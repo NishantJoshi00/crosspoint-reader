@@ -22,6 +22,9 @@ class CrossPointState : public PersistableStore<CrossPointState> {
   uint8_t recentSleepFill = 0;                          // valid entries (0..SLEEP_RECENT_COUNT)
   uint8_t readerActivityLoadCount = 0;
   bool lastSleepFromReader = false;
+  // Effective CrossPointSettings::SLEEP_SCREEN_MODE of the last sleep. A QR
+  // code left on the panel sleeps as QUICK_RESUME regardless of the setting.
+  uint8_t lastSleepScreen = 0;
   bool showBootScreen = true;
 
   static const char* getFilePath() { return "/.crosspoint/state.json"; }
