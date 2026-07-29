@@ -3,7 +3,6 @@ _language_code: "CAV"
 _order: "22"
 
 STR_CROSSPOINT: "CrossPoint"
-STR_BOOTING: "ARRENCANT"
 STR_SLEEPING: "ENTRANT EN REPÒS"
 STR_ENTERING_SLEEP: "Entrant en repòs"
 STR_BROWSE_FILES: "Explora arxius"

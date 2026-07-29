@@ -3,7 +3,6 @@ _language_code: "HE"
 _order: "23"
 
 STR_CROSSPOINT: "CrossPoint"
-STR_BOOTING: "מפעיל..."
 STR_SLEEPING: "מצב שינה"
 STR_ENTERING_SLEEP: "עובר למצב שינה"
 STR_BROWSE_FILES: "סייר קבצים"
