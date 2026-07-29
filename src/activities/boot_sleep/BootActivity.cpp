@@ -1,6 +1,7 @@
 #include "BootActivity.h"
 
 #include <GfxRenderer.h>
+#include <HalGPIO.h>
 
 #include <algorithm>
 #include <cmath>
@@ -79,6 +80,14 @@ void BootActivity::onEnter() {
 void BootActivity::playHandoffAnimation(const GfxRenderer& renderer) {
   const int cx = renderer.getScreenWidth() / 2;
   const int cy = renderer.getScreenHeight() / 2;
+  if (gpio.deviceIsX3()) {
+    // The X3 driver arms two boot full-syncs in begin(); onEnter()'s splash
+    // paint consumed one. Burn the second on the static splash frame so the
+    // promotion (full waveform + settle passes, ~2s) lands here instead of
+    // freezing the first rotation frame mid-animation.
+    drawLogoFrame(renderer, cx, cy, 0);
+    renderer.displayBuffer();
+  }
   for (int angle = HANDOFF_STEP_DEG; angle <= HANDOFF_FINAL_DEG; angle += HANDOFF_STEP_DEG) {
     drawLogoFrame(renderer, cx, cy, angle);
     // Fast refresh blocks until the panel latches the frame, pacing the steps.
