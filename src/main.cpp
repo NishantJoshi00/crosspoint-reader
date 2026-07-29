@@ -29,6 +29,7 @@
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 #include "activities/boot_sleep/BootActivity.h"
+#include "activities/qr/QrCodeViewActivity.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -196,6 +197,8 @@ static bool loadSleepFrameBuffer() {
 void enterDeepSleep(bool fromTimeout = false) {
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
+  const char* qrName = activityManager.qrSleepName();
+  APP_STATE.sleepQrName = qrName ? qrName : "";
 
   const bool isQuickResumeSleep =
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
@@ -427,6 +430,13 @@ void setup() {
     // through to the sleep-wake "resume reader" logic, which fires on stale
     // openEpubPath + lastSleepFromReader from a prior session.
     activityManager.goHome();
+  } else if (!APP_STATE.sleepQrName.empty() && !mappedInputManager.isPressed(MappedInputManager::Button::Back)) {
+    // Last sleep was from the QR viewer: resume into the same code. Clear the
+    // state first so a crash in the viewer cannot cause a boot loop.
+    const auto qrResumeName = APP_STATE.sleepQrName;
+    APP_STATE.sleepQrName = "";
+    APP_STATE.saveToFile();
+    activityManager.replaceActivity(std::make_unique<QrCodeViewActivity>(renderer, mappedInputManager, qrResumeName));
   } else if (APP_STATE.openEpubPath.empty() || !APP_STATE.lastSleepFromReader ||
              mappedInputManager.isPressed(MappedInputManager::Button::Back) || APP_STATE.readerActivityLoadCount > 0) {
     // Boot to home screen if no book is open, last sleep was not from reader, back button is held, or reader activity
