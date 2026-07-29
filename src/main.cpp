@@ -28,6 +28,7 @@
 #include "SdCardFontSystem.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
+#include "activities/boot_sleep/BootActivity.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -403,6 +404,12 @@ void setup() {
     case BootResume::Splash:
       activityManager.goToBoot();
       break;
+  }
+
+  // Phase-2 boot logo: rotate the hexagram in over the splash just before the
+  // screen is handed to the first real activity.
+  if (resume == BootResume::Splash && !recoveryFirmwareMode && !HalSystem::isRebootFromPanic()) {
+    BootActivity::playHandoffAnimation(renderer);
   }
 
   if (recoveryFirmwareMode) {
