@@ -16,6 +16,7 @@ CLAUDE.md does not carry.
 
 | Skill | Loads when you are... |
 |---|---|
+| `add-app` | adding a new app/feature: a new activity, screen, flow, or menu entry |
 | `heap-discipline` | allocating memory: new/malloc/vector/string, buffers, caches |
 | `control-flow-clarity` | writing branching logic, state flags, modes, if/else ladders |
 | `hal-and-abstractions` | touching storage, input, display, settings, i18n, rendering |
