@@ -3,7 +3,6 @@ _language_code: "SK"
 _order: "24"
 
 STR_CROSSPOINT: "CrossPoint"
-STR_BOOTING: "SPÚŠŤANIE"
 STR_SLEEPING: "SPÁNOK"
 STR_ENTERING_SLEEP: "Prechod do režimu spánku"
 STR_BROWSE_FILES: "Prehliadať súbory"

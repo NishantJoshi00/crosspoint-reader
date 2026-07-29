@@ -3,7 +3,6 @@ _language_code: "PL"
 _order: "13"
 
 STR_CROSSPOINT: "CrossPoint"
-STR_BOOTING: "Bootowanie"
 STR_SLEEPING: "Uśpienie"
 STR_ENTERING_SLEEP: "Przechodzę w stan uśpienia"
 STR_BROWSE_FILES: "Przeglądaj pliki"

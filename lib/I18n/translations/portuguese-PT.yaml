@@ -3,7 +3,6 @@ _language_code: "P2"
 _order: "27"
 
 STR_CROSSPOINT: "CrossPoint"
-STR_BOOTING: "A INICIAR"
 STR_SLEEPING: "EM REPOUSO"
 STR_ENTERING_SLEEP: "A entrar em repouso"
 STR_BROWSE_FILES: "Explorar ficheiros"
