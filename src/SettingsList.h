@@ -201,6 +201,10 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     sleepScreenValues[CrossPointSettings::COVER_CUSTOM] = StrId::STR_COVER_CUSTOM;
     sleepScreenValues[CrossPointSettings::BLANK] = StrId::STR_NONE_OPT;
     sleepScreenValues[CrossPointSettings::QUICK_RESUME] = StrId::STR_QUICK_RESUME;
+    // Always present so fromJson's enum clamp accepts a persisted MEMENTO_MORI
+    // before the birthdate string has loaded. The device Settings UI hides it
+    // until a valid birthdate exists (see SettingsActivity::rebuildSettingsLists).
+    sleepScreenValues[CrossPointSettings::MEMENTO_MORI] = StrId::STR_MEMENTO_MORI;
 
     std::vector<StrId> statusBarClockValues(CrossPointSettings::STATUS_BAR_CLOCK_MODE_COUNT);
     statusBarClockValues[CrossPointSettings::STATUS_BAR_CLOCK_HIDE] = StrId::STR_HIDE;
@@ -313,6 +317,13 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                             "removeReadBooksFromRecents", StrId::STR_CAT_SYSTEM),
         SettingInfo::Toggle(StrId::STR_MOVE_FINISHED_TO_READ, &CrossPointSettings::moveFinishedToReadFolder,
                             "moveFinishedToReadFolder", StrId::STR_CAT_SYSTEM),
+
+        // --- User ---
+        // Birth date for the Memento Mori sleep screen. Web-editable; the
+        // on-device User tab edits it via a keyboard ACTION instead (the
+        // device list loop only surfaces non-STRING entries per category).
+        SettingInfo::String(StrId::STR_USER_BIRTHDATE, &SETTINGS.userBirthdate[0], sizeof(SETTINGS.userBirthdate),
+                            "userBirthdate", StrId::STR_CAT_USER),
 
         // OPDS download folder: persisted + web-exposed, but category-less so it
         // is hidden from the on-device Settings screen (edited via OPDS UI).

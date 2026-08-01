@@ -27,6 +27,16 @@ class HalClock {
   // Returns false if RTC is not available.
   bool getTime(uint8_t& hour, uint8_t& minute) const;
 
+  // Get the current civil date, shifted by the user's UTC offset (biased
+  // quarter-hours, 48 = UTC+0) with calendar-correct day rollover.
+  // Returns false if the RTC is absent or its time is unreliable.
+  bool getDate(uint16_t& year, uint8_t& month, uint8_t& day, uint8_t utcOffsetQuarterHoursBiased = 48) const;
+
+  // Days since the civil epoch 1970-01-01 (negative before it). Proleptic
+  // Gregorian; Howard Hinnant's days_from_civil. Useful for date arithmetic
+  // like "days between two dates".
+  static int32_t daysFromCivil(int year, int month, int day);
+
   // Format time into a caller-provided buffer.
   // 24h mode produces "HH:MM" (needs >=6 bytes); 12h mode produces "H:MM AM"/"HH:MM PM" (needs >=9 bytes).
   // utcOffsetQuarterHoursBiased: biased quarter-hour offset (48 = UTC+0, 0 = UTC-12, 104 = UTC+14).
