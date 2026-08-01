@@ -3,11 +3,15 @@
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalClock.h>
 #include <HalGPIO.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Txt.h>
 #include <Xtc.h>
+
+#include <cstdio>
+#include <cstring>
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
@@ -57,6 +61,8 @@ void SleepActivity::onEnter() {
       } else {
         return renderCustomSleepScreen();
       }
+    case (CrossPointSettings::SLEEP_SCREEN_MODE::MEMENTO_MORI):
+      return renderMementoMoriSleepScreen();
     default:
       return renderDefaultSleepScreen();
   }
@@ -173,6 +179,79 @@ void SleepActivity::renderDefaultSleepScreen() const {
   if (SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::LIGHT) {
     renderer.invertScreen();
   }
+
+  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+}
+
+// 52 boxes, one per week of the current age-year: filled = full weeks since
+// the last birthday, empty = weeks until the next. Below the grid, the total
+// number of days lived (bare number by design). Falls back to the default
+// sleep screen when the birthdate is unset or the RTC date is unreliable.
+void SleepActivity::renderMementoMoriSleepScreen() const {
+  int birthYear, birthMonth, birthDay;
+  uint16_t year;
+  uint8_t month, day;
+  if (!SETTINGS.getBirthdate(birthYear, birthMonth, birthDay) ||
+      !halClock.getDate(year, month, day, SETTINGS.clockUtcOffsetQ)) {
+    return renderDefaultSleepScreen();
+  }
+
+  const int32_t today = HalClock::daysFromCivil(year, month, day);
+  const int32_t daysLived = today - HalClock::daysFromCivil(birthYear, birthMonth, birthDay);
+  if (daysLived < 0) {
+    return renderDefaultSleepScreen();
+  }
+
+  // Last birthday: this year's occurrence, or last year's if still ahead.
+  // A Feb-29 birthday resolves to Mar 1 in non-leap years via the civil
+  // arithmetic — a one-day drift we accept.
+  int32_t lastBirthday = HalClock::daysFromCivil(year, birthMonth, birthDay);
+  if (lastBirthday > today) {
+    lastBirthday = HalClock::daysFromCivil(year - 1, birthMonth, birthDay);
+  }
+  int weeksLived = static_cast<int>((today - lastBirthday) / 7);
+  if (weeksLived > 52) weeksLived = 52;
+
+  constexpr int GRID_COLS = 13;
+  constexpr int GRID_ROWS = 4;
+
+  const int pageWidth = renderer.getScreenWidth();
+  const int pageHeight = renderer.getScreenHeight();
+  const int usableWidth = pageWidth - pageWidth / 5;  // 10% margin each side
+  const int cellStep = usableWidth / GRID_COLS;
+  const int gap = cellStep / 5;
+  const int boxSize = cellStep - gap;
+  const int gridWidth = GRID_COLS * cellStep - gap;
+  const int gridHeight = GRID_ROWS * cellStep - gap;
+  const int gridX = (pageWidth - gridWidth) / 2;
+  const int gridY = (pageHeight - gridHeight) / 2 - pageHeight / 12;
+  const int cornerRadius = boxSize / 6;
+
+  renderer.clearScreen();
+  for (int i = 0; i < GRID_COLS * GRID_ROWS; i++) {
+    const int x = gridX + (i % GRID_COLS) * cellStep;
+    const int y = gridY + (i / GRID_COLS) * cellStep;
+    if (i < weeksLived) {
+      renderer.fillRoundedRect(x, y, boxSize, boxSize, cornerRadius, Color::Black);
+    } else {
+      renderer.drawRoundedRect(x, y, boxSize, boxSize, 2, cornerRadius, true);
+    }
+  }
+
+  // Thousands-separated day count, e.g. "11,673". 10 digits + 3 separators + NUL.
+  char digits[12];
+  snprintf(digits, sizeof(digits), "%ld", static_cast<long>(daysLived));
+  char formatted[16];
+  const int len = static_cast<int>(strlen(digits));
+  int out = 0;
+  for (int i = 0; i < len && out < static_cast<int>(sizeof(formatted)) - 1; i++) {
+    if (i > 0 && (len - i) % 3 == 0) formatted[out++] = ',';
+    formatted[out++] = digits[i];
+  }
+  formatted[out] = '\0';
+
+  renderer.drawCenteredText(NOTOSANS_18_FONT_ID, gridY + gridHeight + pageHeight / 16, formatted, true,
+                            EpdFontFamily::BOLD);
 
   renderer.displayBuffer(HalDisplay::HALF_REFRESH);
 }

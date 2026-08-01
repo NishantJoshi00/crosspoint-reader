@@ -24,17 +24,19 @@
 #include "TextSettingsActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
+#include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
-const StrId SettingsActivity::categoryNames[categoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER,
-                                                              StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM};
+const StrId SettingsActivity::categoryNames[categoryCount] = {
+    StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER, StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM, StrId::STR_CAT_USER};
 
 void SettingsActivity::rebuildSettingsLists() {
   displaySettings.clear();
   readerSettings.clear();
   controlsSettings.clear();
   systemSettings.clear();
+  userSettings.clear();
 
   // Pick up any fonts uploaded/deleted over the web server since the last
   // reader activity ran — otherwise the font-family picker shows stale list.
@@ -48,6 +50,13 @@ void SettingsActivity::rebuildSettingsLists() {
   for (auto& setting : getSettingsList(&sdFontSystem.registry(), &dictionaries)) {
     if (setting.category == StrId::STR_NONE_OPT) continue;
     if (setting.category == StrId::STR_CAT_DISPLAY) {
+      // Hide the Memento Mori sleep option until a birthdate exists. Kept when
+      // already selected (e.g. set via web) so the value's label lookup stays
+      // in bounds.
+      if (setting.valuePtr == &CrossPointSettings::sleepScreen && !SETTINGS.hasValidBirthdate() &&
+          SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::MEMENTO_MORI) {
+        setting.enumValues.pop_back();
+      }
       displaySettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_READER) {
       // Settings merged into "Text Settings"
@@ -85,6 +94,7 @@ void SettingsActivity::rebuildSettingsLists() {
   readerSettings.insert(readerSettings.begin() + 1,
                         SettingInfo::Action(StrId::STR_MANAGE_FONTS, SettingAction::DownloadFonts));
   readerSettings.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
+  userSettings.push_back(SettingInfo::Action(StrId::STR_USER_BIRTHDATE, SettingAction::SetBirthdate));
 
   // Update currentSettings pointer and count for the active category
   switch (selectedCategoryIndex) {
@@ -99,6 +109,9 @@ void SettingsActivity::rebuildSettingsLists() {
       break;
     case 3:
       currentSettings = &systemSettings;
+      break;
+    case 4:
+      currentSettings = &userSettings;
       break;
   }
   settingsCount = static_cast<int>(currentSettings->size());
@@ -145,6 +158,9 @@ void SettingsActivity::loop() {
         break;
       case 3:
         currentSettings = &systemSettings;
+        break;
+      case 4:
+        currentSettings = &userSettings;
         break;
     }
     settingsCount = static_cast<int>(currentSettings->size());
@@ -409,6 +425,9 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::Language:
         startActivityForResult(std::make_unique<LanguageSelectActivity>(renderer, mappedInput), resultHandler);
         break;
+      case SettingAction::SetBirthdate:
+        openBirthdateEntry(SETTINGS.userBirthdate);
+        break;
       case SettingAction::None:
         // Do nothing
         break;
@@ -460,6 +479,31 @@ void SettingsActivity::openSleepTimeoutPicker() {
         }
         requestUpdate();
       });
+}
+
+void SettingsActivity::openBirthdateEntry(std::string prefill) {
+  startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_USER_BIRTHDATE_PROMPT),
+                                                                 std::move(prefill), 10, InputType::Text),
+                         [this](const ActivityResult& result) {
+                           if (result.isCancelled) return;
+                           std::string text = std::get<KeyboardResult>(result.data).text;
+                           text.erase(0, text.find_first_not_of(' '));
+                           text.erase(text.find_last_not_of(' ') + 1);
+
+                           int y, m, d;
+                           if (!text.empty() && !CrossPointSettings::parseDate(text.c_str(), y, m, d)) {
+                             // Invalid input: reopen with what was typed so it can be corrected.
+                             openBirthdateEntry(std::move(text));
+                             return;
+                           }
+                           // Valid or intentionally cleared (empty). Save only on change.
+                           if (text != SETTINGS.userBirthdate) {
+                             strncpy(SETTINGS.userBirthdate, text.c_str(), sizeof(SETTINGS.userBirthdate) - 1);
+                             SETTINGS.userBirthdate[sizeof(SETTINGS.userBirthdate) - 1] = '\0';
+                             SETTINGS.saveToFile();
+                             rebuildSettingsLists();
+                           }
+                         });
 }
 
 void SettingsActivity::render(RenderLock&&) {

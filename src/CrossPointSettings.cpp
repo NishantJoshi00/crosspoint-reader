@@ -354,3 +354,27 @@ int CrossPointSettings::getReaderFontId() const {
       return sans ? NOTOSANS_14_FONT_ID : NOTOSERIF_14_FONT_ID;
   }
 }
+
+bool CrossPointSettings::parseDate(const char* str, int& year, int& month, int& day) {
+  // Strict "YYYY-MM-DD": 10 chars, digits and dashes in fixed positions.
+  if (str == nullptr || strlen(str) != 10 || str[4] != '-' || str[7] != '-') return false;
+  for (int i = 0; i < 10; i++) {
+    if (i == 4 || i == 7) continue;
+    if (str[i] < '0' || str[i] > '9') return false;
+  }
+
+  const int y = (str[0] - '0') * 1000 + (str[1] - '0') * 100 + (str[2] - '0') * 10 + (str[3] - '0');
+  const int m = (str[5] - '0') * 10 + (str[6] - '0');
+  const int d = (str[8] - '0') * 10 + (str[9] - '0');
+
+  if (y < 1900 || y > 2100 || m < 1 || m > 12) return false;
+  static constexpr uint8_t MONTH_DAYS[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  const bool leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+  const int maxDay = (m == 2 && leap) ? 29 : MONTH_DAYS[m - 1];
+  if (d < 1 || d > maxDay) return false;
+
+  year = y;
+  month = m;
+  day = d;
+  return true;
+}
