@@ -67,6 +67,12 @@ void HalTiltSensor::update(const uint8_t mode, const uint8_t orientation, const 
     return;
   }
 
+  // A shake session owns the IMU power state and polls via updateShake();
+  // leave both alone until the session ends.
+  if (_shakeSession) {
+    return;
+  }
+
   // State machine: wake up or sleep based on the enabled flag
   if ((mode != CrossPointTiltPageTurn::TILT_OFF) && !_isAwake) {
     _isAwake = wake();
@@ -166,4 +172,76 @@ void HalTiltSensor::clearPendingEvents() {
   _tiltBackEvent = false;
   _hadActivity = false;
   // Intentionally preserve _inTilt so a held tilt doesn't retrigger on next poll
+}
+
+bool HalTiltSensor::beginShakeSession() {
+  if (!_available) {
+    return false;
+  }
+  _shakeSession = true;
+  _shakeEvent = false;
+  _inShake = false;
+  _lastShakeMs = millis();
+  if (!_isAwake) {
+    _isAwake = wake();
+  }
+  return _isAwake;
+}
+
+void HalTiltSensor::endShakeSession() {
+  if (!_shakeSession) {
+    return;
+  }
+  _shakeSession = false;
+  _shakeEvent = false;
+  _inShake = false;
+  // Put the IMU on standby; if tilt page turn is enabled, the global update()
+  // state machine re-wakes it on the next main loop tick.
+  if (_isAwake) {
+    _isAwake = !deepSleep();
+  }
+}
+
+void HalTiltSensor::updateShake() {
+  if (!_available || !_shakeSession || !_isAwake) {
+    return;
+  }
+
+  const unsigned long now = millis();
+  if ((now - _wakeMs) < WAKE_STABILIZE_MS) {
+    return;
+  }
+  if ((now - _lastPollMs) < POLL_INTERVAL_MS) {
+    return;
+  }
+  _lastPollMs = now;
+
+  float gx, gy, gz;
+  if (!readGyro(gx, gy, gz)) {
+    return;
+  }
+
+  // Orientation-agnostic: a shake is high angular rate on any axis.
+  const float magnitude = sqrtf(gx * gx + gy * gy + gz * gz);
+
+  if (_inShake) {
+    if (magnitude < SHAKE_NEUTRAL_DPS) {
+      _inShake = false;
+    }
+    return;
+  }
+
+  if ((now - _lastShakeMs) >= SHAKE_COOLDOWN_MS && magnitude > SHAKE_THRESHOLD_DPS) {
+    _shakeEvent = true;
+    _hadActivity = true;
+    _inShake = true;
+    _lastShakeMs = now;
+    LOG_INF("GYR", "Shake Trigger=(%.1f) dps", magnitude);
+  }
+}
+
+bool HalTiltSensor::wasShaken() {
+  const bool val = _shakeEvent;
+  _shakeEvent = false;
+  return val;
 }

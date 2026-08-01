@@ -115,7 +115,8 @@ enum UIIcon {
   Wifi,
   Hotspot,
   Bookmark,
-  Qr
+  Qr,
+  Dice
 };
 
 // Default theme implementation (Classic Theme)

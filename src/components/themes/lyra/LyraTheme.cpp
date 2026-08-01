@@ -17,6 +17,7 @@
 #include "components/icons/book24.h"
 #include "components/icons/bookmark.h"
 #include "components/icons/cover.h"
+#include "components/icons/dice.h"
 #include "components/icons/file24.h"
 #include "components/icons/folder.h"
 #include "components/icons/folder24.h"
@@ -80,6 +81,8 @@ const uint8_t* iconForName(UIIcon icon, int size) {
         return BookmarkIcon;
       case UIIcon::Qr:
         return QrIcon;
+      case UIIcon::Dice:
+        return DiceIcon;
       default:
         return nullptr;
     }
