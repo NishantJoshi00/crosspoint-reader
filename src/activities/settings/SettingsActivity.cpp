@@ -10,6 +10,7 @@
 
 #include "ButtonRemapActivity.h"
 #include "ClearCacheActivity.h"
+#include "ClockSyncActivity.h"
 #include "CrossPointSettings.h"
 #include "FontDownloadActivity.h"
 #include "KOReaderSettingsActivity.h"
@@ -50,13 +51,6 @@ void SettingsActivity::rebuildSettingsLists() {
   for (auto& setting : getSettingsList(&sdFontSystem.registry(), &dictionaries)) {
     if (setting.category == StrId::STR_NONE_OPT) continue;
     if (setting.category == StrId::STR_CAT_DISPLAY) {
-      // Hide the Memento Mori sleep option until a birthdate exists. Kept when
-      // already selected (e.g. set via web) so the value's label lookup stays
-      // in bounds.
-      if (setting.valuePtr == &CrossPointSettings::sleepScreen && !SETTINGS.hasValidBirthdate() &&
-          SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::MEMENTO_MORI) {
-        setting.enumValues.pop_back();
-      }
       displaySettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_READER) {
       // Settings merged into "Text Settings"
@@ -344,6 +338,7 @@ void SettingsActivity::toggleCurrentSetting() {
                          syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
                          SETTINGS.saveToFile();
                          rebuildSettingsLists();
+                         if (sleepScreenChanged) showMementoMoriSetupPopup();
                        });
       requestUpdate();
       return;
@@ -481,6 +476,33 @@ void SettingsActivity::openSleepTimeoutPicker() {
       });
 }
 
+// Memento Mori needs a birthdate and a trustworthy RTC date. When it is the
+// active sleep screen and either is missing, offer the missing setup steps
+// directly; each option deep-links into the corresponding flow, and each flow
+// re-invokes this on completion until nothing is missing. Back dismisses; the
+// sleep screen then falls back to the default rendering until setup is done.
+void SettingsActivity::showMementoMoriSetupPopup() {
+  if (SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::MEMENTO_MORI) return;
+  const bool needsBirthdate = !SETTINGS.hasValidBirthdate();
+  const bool needsClockSync = !SETTINGS.clockHasBeenSynced;
+  if (!needsBirthdate && !needsClockSync) return;
+
+  StrId options[2];
+  int optionCount = 0;
+  if (needsBirthdate) options[optionCount++] = StrId::STR_SET_BIRTHDATE;
+  if (needsClockSync) options[optionCount++] = StrId::STR_CLOCK_SYNC_NOW;
+
+  optionPopup.show(StrId::STR_MEMENTO_MORI_SETUP, options, optionCount, 0, [this, needsBirthdate](int idx) {
+    if (needsBirthdate && idx == 0) {
+      openBirthdateEntry(SETTINGS.userBirthdate);
+    } else {
+      startActivityForResult(std::make_unique<ClockSyncActivity>(renderer, mappedInput),
+                             [this](const ActivityResult&) { showMementoMoriSetupPopup(); });
+    }
+  });
+  requestUpdate();
+}
+
 void SettingsActivity::openBirthdateEntry(std::string prefill) {
   startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_USER_BIRTHDATE_PROMPT),
                                                                  std::move(prefill), 10, InputType::Text),
@@ -503,6 +525,8 @@ void SettingsActivity::openBirthdateEntry(std::string prefill) {
                              SETTINGS.saveToFile();
                              rebuildSettingsLists();
                            }
+                           // Continue guided Memento Mori setup if steps remain.
+                           showMementoMoriSetupPopup();
                          });
 }
 

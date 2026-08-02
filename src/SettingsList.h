@@ -201,9 +201,9 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     sleepScreenValues[CrossPointSettings::COVER_CUSTOM] = StrId::STR_COVER_CUSTOM;
     sleepScreenValues[CrossPointSettings::BLANK] = StrId::STR_NONE_OPT;
     sleepScreenValues[CrossPointSettings::QUICK_RESUME] = StrId::STR_QUICK_RESUME;
-    // Always present so fromJson's enum clamp accepts a persisted MEMENTO_MORI
-    // before the birthdate string has loaded. The device Settings UI hides it
-    // until a valid birthdate exists (see SettingsActivity::rebuildSettingsLists).
+    // Selecting this in the device Settings UI triggers a guided setup popup
+    // when the birthdate or clock sync is missing (see
+    // SettingsActivity::showMementoMoriSetupPopup).
     sleepScreenValues[CrossPointSettings::MEMENTO_MORI] = StrId::STR_MEMENTO_MORI;
 
     std::vector<StrId> statusBarClockValues(CrossPointSettings::STATUS_BAR_CLOCK_MODE_COUNT);
