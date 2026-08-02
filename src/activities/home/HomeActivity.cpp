@@ -259,17 +259,33 @@ void HomeActivity::loop() {
       metrics.homeContinueReadingInMenu ? selectorIndex : selectorIndex - recentBooks.size();
   const int renderedMenuCount =
       menuCount - (metrics.homeContinueReadingInMenu ? 0 : static_cast<int>(recentBooks.size()));
+  // Mirror the theme's menu windowing so touch rows map to the items actually
+  // drawn (the menu shows at most maxHomeMenuRows rows with scroll chevrons).
+  const int rowStep = metrics.menuRowHeight + metrics.menuSpacing;
+  const int menuAreaHeight = renderer.getScreenHeight() - metrics.buttonHintsHeight - menuTop;
+  const int maxRows = std::min(BaseTheme::maxHomeMenuRows, (menuAreaHeight + metrics.menuSpacing) / rowStep);
+  const MenuWindow window = BaseTheme::computeMenuWindow(renderedMenuCount, renderedMenuSelection, maxRows);
+  const int slotCount = window.rowCount + (window.showUpArrow ? 1 : 0);
   int menuRow = -1;
-  const auto menuTouch = mappedInput.rowTouch(menuRow, menuTop, metrics.menuRowHeight + metrics.menuSpacing,
-                                              renderedMenuCount, 0, INT32_MAX, metrics.menuRowHeight);
+  const auto menuTouch =
+      mappedInput.rowTouch(menuRow, menuTop, rowStep, slotCount, 0, INT32_MAX, metrics.menuRowHeight);
   if (menuTouch != MappedInputManager::RowTouch::None) {
+    const bool upArrowRow = window.showUpArrow && menuRow == 0;
+    const int touchedMenuIndex = upArrowRow ? window.startIndex - 1  // up-arrow slot scrolls up one item
+                                            : window.startIndex + menuRow - (window.showUpArrow ? 1 : 0);
     const int touchedIndex =
-        metrics.homeContinueReadingInMenu ? menuRow : menuRow + static_cast<int>(recentBooks.size());
+        metrics.homeContinueReadingInMenu ? touchedMenuIndex : touchedMenuIndex + static_cast<int>(recentBooks.size());
     if (menuTouch == MappedInputManager::RowTouch::Down) {
-      if (selectorIndex != touchedIndex) {
+      // Changing the selection can shift a scrolled window (showUpArrow), which
+      // would remap the row under the finger before the Tap lands. Only preview
+      // the selection when the window is pinned to the top and cannot shift.
+      if (!window.showUpArrow && selectorIndex != touchedIndex) {
         selectorIndex = touchedIndex;
         requestUpdate();
       }
+    } else if (upArrowRow) {
+      selectorIndex = touchedIndex;  // scroll only, no activation
+      requestUpdate();
     } else {
       selectorIndex = touchedIndex;
       activateSelection();
@@ -321,11 +337,10 @@ void HomeActivity::render(RenderLock&&) {
     menuIcons.insert(menuIcons.begin(), Book);
   }
 
+  // Menu area runs from below the cover tile to the top of the button hints.
+  const int menuTop = metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset;
   GUI.drawButtonMenu(
-      renderer,
-      Rect{0, metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset, pageWidth,
-           pageHeight - (metrics.headerHeight + metrics.homeTopPadding + metrics.verticalSpacing +
-                         metrics.homeMenuTopOffset + metrics.buttonHintsHeight)},
+      renderer, Rect{0, menuTop, pageWidth, pageHeight - metrics.buttonHintsHeight - menuTop},
       static_cast<int>(menuItems.size()),
       metrics.homeContinueReadingInMenu ? selectorIndex : selectorIndex - recentBooks.size(),
       [&menuItems](int index) { return std::string(menuItems[index]); },

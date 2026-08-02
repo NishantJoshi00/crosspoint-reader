@@ -23,6 +23,16 @@ struct TabInfo {
   bool selected;
 };
 
+// Visible slice of the home button menu when it has more items than row slots.
+// The up arrow replaces the top row slot; the down arrow is drawn in the gap
+// below the last row (it does not consume a slot).
+struct MenuWindow {
+  int startIndex;
+  int rowCount;
+  bool showUpArrow;
+  bool showDownArrow;
+};
+
 struct ThemeMetrics {
   int batteryWidth;
   int batteryHeight;
@@ -242,4 +252,10 @@ class BaseTheme {
   static constexpr int batteryPercentSpacing = 4;
   static void drawBatteryOutline(const GfxRenderer& renderer, int x, int y, int battWidth, int rectHeight);
   static void drawBatteryLightningBolt(const GfxRenderer& renderer, int boltX, int boltY);
+
+  // Home button menu windowing, shared between themes and HomeActivity touch
+  // mapping so rendered rows and touch rows always agree.
+  static constexpr int maxHomeMenuRows = 5;
+  static MenuWindow computeMenuWindow(int itemCount, int selectedIndex, int maxRows);
+  static void drawScrollChevron(const GfxRenderer& renderer, int centerX, int centerY, bool up);
 };

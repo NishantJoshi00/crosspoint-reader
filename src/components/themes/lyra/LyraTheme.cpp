@@ -555,10 +555,14 @@ void LyraTheme::drawEmptyRecents(const GfxRenderer& renderer, const Rect rect) c
 void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                                const std::function<std::string(int index)>& buttonLabel,
                                const std::function<UIIcon(int index)>& rowIcon) const {
-  for (int i = 0; i < buttonCount; ++i) {
+  const int rowStep = LyraMetrics::values.menuRowHeight + LyraMetrics::values.menuSpacing;
+  const int maxRows = std::min(maxHomeMenuRows, (rect.height + LyraMetrics::values.menuSpacing) / rowStep);
+  const MenuWindow window = computeMenuWindow(buttonCount, selectedIndex, maxRows);
+
+  for (int i = window.startIndex; i < window.startIndex + window.rowCount; ++i) {
+    const int slot = i - window.startIndex + (window.showUpArrow ? 1 : 0);
     int tileWidth = rect.width - LyraMetrics::values.contentSidePadding * 2;
-    Rect tileRect = Rect{rect.x + LyraMetrics::values.contentSidePadding,
-                         rect.y + i * (LyraMetrics::values.menuRowHeight + LyraMetrics::values.menuSpacing), tileWidth,
+    Rect tileRect = Rect{rect.x + LyraMetrics::values.contentSidePadding, rect.y + slot * rowStep, tileWidth,
                          LyraMetrics::values.menuRowHeight};
 
     const bool selected = selectedIndex == i;
@@ -583,5 +587,15 @@ void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
     }
 
     renderer.drawText(UI_12_FONT_ID, textX, textY, label, true);
+  }
+
+  const int centerX = rect.x + rect.width / 2;
+  if (window.showUpArrow) {
+    drawScrollChevron(renderer, centerX, rect.y + LyraMetrics::values.menuRowHeight / 2, true);
+  }
+  if (window.showDownArrow) {
+    const int slotsUsed = window.rowCount + (window.showUpArrow ? 1 : 0);
+    const int lastRowBottom = rect.y + slotsUsed * rowStep - LyraMetrics::values.menuSpacing;
+    drawScrollChevron(renderer, centerX, (lastRowBottom + rect.y + rect.height) / 2, false);
   }
 }
