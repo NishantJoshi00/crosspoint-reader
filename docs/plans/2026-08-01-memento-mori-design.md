@@ -5,15 +5,18 @@ Status: Approved
 
 ## Summary
 
-A new sleep screen mode that renders the current year of your life as a
-52-box week grid: filled boxes are full weeks elapsed since your last
-birthday, empty boxes are the weeks remaining until the next one. Below the
-grid, the total number of days lived — a bare number, no label.
+A new sleep screen mode that renders your whole life as the classic
+life-in-weeks grid: 52 columns (weeks) x 80 rows (years). Completed
+age-years are full rows; the current age-year's row fills with the weeks
+elapsed since your last birthday. Below the grid, the total number of days
+lived — a bare number, no label.
 
 ## Decisions (workshopped)
 
-- **Grid**: exactly 52 boxes (weeks of the current age-year), 13x4,
+- **Grid**: 4160 boxes (52 weeks x 80 years), one row per year of life,
   black-on-white, minimal composition — no title, no age, no "days" label.
+  (Originally shipped as a 13x4 grid of the current age-year only; revised
+  same-day to the full-life grid.)
 - **Birthdate entry**: new **User** settings tab (5th category) with a
   "Birth date" action that opens the keyboard (format `YYYY-MM-DD`,
   validated; invalid input reopens the keyboard; empty clears).
@@ -47,12 +50,14 @@ grid, the total number of days lived — a bare number, no label.
   `static daysFromCivil()` (Howard Hinnant's civil-days algorithm) shared
   with the renderer. Returns false when the RTC is absent or unreliable
   (oscillator-stopped), which triggers the fallback.
-- `SleepActivity::renderMementoMoriSleepScreen()`: computes days lived and
-  full weeks since the last birthday (Feb-29 birthdays resolve via the civil
-  arithmetic), draws the 13x4 grid centered, filled `fillRoundedRect` /
-  empty `drawRoundedRect`, and the thousands-separated day count beneath.
-  `HALF_REFRESH`, no inversion.
+- `SleepActivity::renderMementoMoriSleepScreen()`: computes days lived, age
+  in completed years, and full weeks since the last birthday (Feb-29
+  birthdays resolve via the civil arithmetic), draws the 52x80 grid centered
+  (cell pitch = min of width/height fit, ~7px boxes with 1px gaps in
+  portrait), filled `fillRect` / empty 1px `drawRect`, and the
+  thousands-separated day count beneath. `HALF_REFRESH`, no inversion.
 
 ## Out of scope
 
-Life-expectancy grids, age display, per-day granularity, multiple users.
+Age display, per-day granularity, multiple users, configurable lifespan
+(80 years is fixed).

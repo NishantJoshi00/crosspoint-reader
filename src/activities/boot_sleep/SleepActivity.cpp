@@ -10,6 +10,7 @@
 #include <Txt.h>
 #include <Xtc.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -183,10 +184,11 @@ void SleepActivity::renderDefaultSleepScreen() const {
   renderer.displayBuffer(HalDisplay::HALF_REFRESH);
 }
 
-// 52 boxes, one per week of the current age-year: filled = full weeks since
-// the last birthday, empty = weeks until the next. Below the grid, the total
-// number of days lived (bare number by design). Falls back to the default
-// sleep screen when the birthdate is unset or the RTC date is unreliable.
+// Life-in-weeks grid: 52 columns (weeks) x 80 rows (years of life). Completed
+// age-years are full rows; the current age-year's row fills with the weeks
+// since the last birthday. Below the grid, the total number of days lived
+// (bare number by design). Falls back to the default sleep screen when the
+// birthdate is unset or the RTC date is unreliable.
 void SleepActivity::renderMementoMoriSleepScreen() const {
   int birthYear, birthMonth, birthDay;
   uint16_t year;
@@ -205,36 +207,45 @@ void SleepActivity::renderMementoMoriSleepScreen() const {
   // Last birthday: this year's occurrence, or last year's if still ahead.
   // A Feb-29 birthday resolves to Mar 1 in non-leap years via the civil
   // arithmetic — a one-day drift we accept.
+  int age = year - birthYear;
   int32_t lastBirthday = HalClock::daysFromCivil(year, birthMonth, birthDay);
   if (lastBirthday > today) {
     lastBirthday = HalClock::daysFromCivil(year - 1, birthMonth, birthDay);
+    age--;
   }
-  int weeksLived = static_cast<int>((today - lastBirthday) / 7);
-  if (weeksLived > 52) weeksLived = 52;
+  // 52*7 = 364, so the final box absorbs the 1-2 leftover days of the year.
+  int weeksIntoYear = static_cast<int>((today - lastBirthday) / 7);
+  if (weeksIntoYear > 52) weeksIntoYear = 52;
 
-  constexpr int GRID_COLS = 13;
-  constexpr int GRID_ROWS = 4;
+  constexpr int GRID_COLS = 52;  // weeks per year-row
+  constexpr int GRID_ROWS = 80;  // years of life
+  if (age > GRID_ROWS) age = GRID_ROWS;
 
   const int pageWidth = renderer.getScreenWidth();
   const int pageHeight = renderer.getScreenHeight();
-  const int usableWidth = pageWidth - pageWidth / 5;  // 10% margin each side
-  const int cellStep = usableWidth / GRID_COLS;
-  const int gap = cellStep / 5;
+  const int marginX = pageWidth / 24;
+  const int marginTop = pageHeight / 40;
+  const int textReserve = pageHeight / 10;  // day-count zone below the grid
+  const int cellStep =
+      std::min((pageWidth - 2 * marginX) / GRID_COLS, (pageHeight - marginTop - textReserve) / GRID_ROWS);
+  const int gap = std::max(1, cellStep / 6);
   const int boxSize = cellStep - gap;
   const int gridWidth = GRID_COLS * cellStep - gap;
   const int gridHeight = GRID_ROWS * cellStep - gap;
   const int gridX = (pageWidth - gridWidth) / 2;
-  const int gridY = (pageHeight - gridHeight) / 2 - pageHeight / 12;
-  const int cornerRadius = boxSize / 6;
+  const int gridY = marginTop + (pageHeight - marginTop - textReserve - gridHeight) / 2;
 
   renderer.clearScreen();
-  for (int i = 0; i < GRID_COLS * GRID_ROWS; i++) {
-    const int x = gridX + (i % GRID_COLS) * cellStep;
-    const int y = gridY + (i / GRID_COLS) * cellStep;
-    if (i < weeksLived) {
-      renderer.fillRoundedRect(x, y, boxSize, boxSize, cornerRadius, Color::Black);
-    } else {
-      renderer.drawRoundedRect(x, y, boxSize, boxSize, 2, cornerRadius, true);
+  for (int row = 0; row < GRID_ROWS; row++) {
+    const int filled = row < age ? GRID_COLS : (row == age ? weeksIntoYear : 0);
+    const int y = gridY + row * cellStep;
+    for (int col = 0; col < GRID_COLS; col++) {
+      const int x = gridX + col * cellStep;
+      if (col < filled) {
+        renderer.fillRect(x, y, boxSize, boxSize);
+      } else {
+        renderer.drawRect(x, y, boxSize, boxSize);
+      }
     }
   }
 
