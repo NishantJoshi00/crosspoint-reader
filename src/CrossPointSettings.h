@@ -21,6 +21,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     COVER_CUSTOM = 4,
     BLANK = 5,
     QUICK_RESUME = 6,
+    MEMENTO_MORI = 7,
     SLEEP_SCREEN_MODE_COUNT
   };
   enum SLEEP_SCREEN_COVER_MODE { FIT = 0, CROP = 1, SLEEP_SCREEN_COVER_MODE_COUNT };
@@ -280,6 +281,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t language = 0;
   // Quick Resume: keep current content visible with moon icon instead of showing a static sleep screen.
   uint8_t quickResumeSleepScreen = QUICK_RESUME_NEVER;
+  // User birth date as "YYYY-MM-DD" (empty = unset). Enables the Memento Mori
+  // sleep screen. Persisted via SettingInfo::String; device editing goes
+  // through the User settings tab's keyboard action.
+  char userBirthdate[11] = "";
 
   static constexpr uint8_t MIN_SLEEP_TIMEOUT_MINUTES = 1;
   static constexpr uint8_t SLEEP_TIMEOUT_NEVER_MINUTES = 31;
@@ -295,6 +300,15 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     return (shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP) ? 10 : 400;
   }
   int getReaderFontId() const;
+
+  // Parse a "YYYY-MM-DD" date string. Returns false on bad format,
+  // out-of-range fields, or a day the month doesn't have (leap-aware).
+  static bool parseDate(const char* str, int& year, int& month, int& day);
+  bool getBirthdate(int& year, int& month, int& day) const { return parseDate(userBirthdate, year, month, day); }
+  bool hasValidBirthdate() const {
+    int y, m, d;
+    return getBirthdate(y, m, d);
+  }
 
   // Drop the SD font selection and fall back to the built-in family. The reader
   // point size comes back into BUILTIN_READER_POINT_SIZES with it, since that is
