@@ -16,6 +16,7 @@
 #include "network/CrossPointWebServerActivity.h"
 #include "qr/QrMenuActivity.h"
 #include "reader/ReaderActivity.h"
+#include "rng/RngActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
 #include "util/FullScreenMessageActivity.h"
@@ -190,6 +191,8 @@ void ActivityManager::goToFileTransfer() {
 }
 
 void ActivityManager::goToQrCodes() { replaceActivity(std::make_unique<QrMenuActivity>(renderer, mappedInput)); }
+
+void ActivityManager::goToRng() { replaceActivity(std::make_unique<RngActivity>(renderer, mappedInput)); }
 
 void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
 

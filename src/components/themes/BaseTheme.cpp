@@ -694,12 +694,47 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
   }
 }
 
+MenuWindow BaseTheme::computeMenuWindow(const int itemCount, const int selectedIndex, int maxRows) {
+  maxRows = std::max(2, maxRows);
+  MenuWindow window{0, itemCount, false, false};
+  if (itemCount <= maxRows) {
+    return window;
+  }
+  // selectedIndex can be negative on the home screen while a recent-book cover
+  // is selected; treat that as the top of the menu.
+  const int selected = std::min(std::max(0, selectedIndex), itemCount - 1);
+  if (selected < maxRows) {
+    window.rowCount = maxRows;
+    window.showDownArrow = true;
+    return window;
+  }
+  window.showUpArrow = true;
+  window.rowCount = maxRows - 1;
+  window.startIndex = selected - (maxRows - 2);
+  window.showDownArrow = window.startIndex + window.rowCount < itemCount;
+  return window;
+}
+
+void BaseTheme::drawScrollChevron(const GfxRenderer& renderer, const int centerX, const int centerY, const bool up) {
+  constexpr int halfWidth = 12;
+  constexpr int halfHeight = 5;
+  const int tipY = up ? centerY - halfHeight : centerY + halfHeight;
+  const int baseY = up ? centerY + halfHeight : centerY - halfHeight;
+  renderer.drawLine(centerX - halfWidth, baseY, centerX, tipY, 3, true);
+  renderer.drawLine(centerX, tipY, centerX + halfWidth, baseY, 3, true);
+}
+
 void BaseTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                                const std::function<std::string(int index)>& buttonLabel,
                                const std::function<UIIcon(int index)>& rowIcon) const {
-  for (int i = 0; i < buttonCount; ++i) {
-    const int tileY = BaseMetrics::values.verticalSpacing + rect.y +
-                      static_cast<int>(i) * (BaseMetrics::values.menuRowHeight + BaseMetrics::values.menuSpacing);
+  const int rowStep = BaseMetrics::values.menuRowHeight + BaseMetrics::values.menuSpacing;
+  const int maxRows = std::min(
+      maxHomeMenuRows, (rect.height - BaseMetrics::values.verticalSpacing + BaseMetrics::values.menuSpacing) / rowStep);
+  const MenuWindow window = computeMenuWindow(buttonCount, selectedIndex, maxRows);
+
+  for (int i = window.startIndex; i < window.startIndex + window.rowCount; ++i) {
+    const int slot = i - window.startIndex + (window.showUpArrow ? 1 : 0);
+    const int tileY = BaseMetrics::values.verticalSpacing + rect.y + slot * rowStep;
 
     const bool selected = selectedIndex == i;
 
@@ -720,6 +755,18 @@ void BaseTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
         tileY + (BaseMetrics::values.menuRowHeight - lineHeight) / 2;  // vertically centered assuming y is top of text
     // Invert text when the tile is selected, to contrast with the filled background
     renderer.drawText(UI_10_FONT_ID, textX, textY, label, selectedIndex != i);
+  }
+
+  const int centerX = rect.x + rect.width / 2;
+  if (window.showUpArrow) {
+    drawScrollChevron(renderer, centerX,
+                      BaseMetrics::values.verticalSpacing + rect.y + BaseMetrics::values.menuRowHeight / 2, true);
+  }
+  if (window.showDownArrow) {
+    const int slotsUsed = window.rowCount + (window.showUpArrow ? 1 : 0);
+    const int lastRowBottom =
+        BaseMetrics::values.verticalSpacing + rect.y + slotsUsed * rowStep - BaseMetrics::values.menuSpacing;
+    drawScrollChevron(renderer, centerX, (lastRowBottom + rect.y + rect.height) / 2, false);
   }
 }
 
