@@ -74,7 +74,9 @@ class OptionPopup {
         if (contains(hitLayout.options[i], tx, ty)) {
           selectedIndex = i;
           active = false;
-          if (onSelectCallback) onSelectCallback(selectedIndex);
+          // Move out before invoking: the callback may call show() again, which
+          // reassigns onSelectCallback and would destroy the running closure.
+          if (auto callback = std::move(onSelectCallback)) callback(selectedIndex);
           requestUpdate();
           return true;
         }
@@ -97,7 +99,9 @@ class OptionPopup {
       return true;
     } else if (input.wasPressed(MappedInputManager::Button::Confirm)) {
       active = false;
-      if (onSelectCallback) onSelectCallback(selectedIndex);
+      // Move out before invoking: the callback may call show() again, which
+      // reassigns onSelectCallback and would destroy the running closure.
+      if (auto callback = std::move(onSelectCallback)) callback(selectedIndex);
       requestUpdate();
       return true;
     } else if (input.wasPressed(MappedInputManager::Button::Back)) {
