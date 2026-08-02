@@ -1,8 +1,8 @@
 """
-PlatformIO pre-build script: inject git branch and short SHA into
+PlatformIO pre-build script: inject the git short SHA into
 CROSSPOINT_VERSION for the default (dev) environment.
 
-Results in a version string like:  1.1.0-dev-feat-kosync-xpath-05c6cf8
+Results in a version string like:  penguin/1.5.0-dev-05c6cf8
 Release environments are unaffected; they set CROSSPOINT_VERSION in the ini.
 """
 
@@ -47,16 +47,6 @@ def run_git_value(project_dir, args, label):
         return 'unknown'
 
 
-def get_git_branch(project_dir):
-    branch = run_git_value(
-        project_dir, ['rev-parse', '--abbrev-ref', 'HEAD'], 'branch'
-    )
-    # Detached HEAD has no branch name.
-    if branch == 'HEAD':
-        return 'detached'
-    return branch
-
-
 def get_git_short_sha(project_dir):
     return run_git_value(
         project_dir, ['rev-parse', '--short', 'HEAD'], 'short SHA'
@@ -84,9 +74,8 @@ def inject_version(env):
 
     project_dir = env['PROJECT_DIR']
     base_version = get_base_version(project_dir)
-    branch = get_git_branch(project_dir)
     short_sha = get_git_short_sha(project_dir)
-    version_string = f'{base_version}-dev-{branch}-{short_sha}'
+    version_string = f'penguin/{base_version}-dev-{short_sha}'
 
     env.Append(CPPDEFINES=[('CROSSPOINT_VERSION', f'\\"{version_string}\\"')])
     print(f'CrossPoint build version: {version_string}')
