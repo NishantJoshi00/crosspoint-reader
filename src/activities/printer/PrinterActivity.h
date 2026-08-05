@@ -6,7 +6,6 @@
 #include <vector>
 
 #include "activities/Activity.h"
-#include "components/OptionPopup.h"
 #include "network/ipp/HttpIppConnection.h"
 #include "network/ipp/IppPrintService.h"
 #include "network/ipp/PageScaler.h"
@@ -69,7 +68,6 @@ class PrinterActivity final : public Activity {
   // on demand when the user traverses to it.
   std::vector<std::string> queue;
   int queueIndex = -1;
-  OptionPopup optionPopup;
 
   void beginModeSelect();
   void onModeChosen(bool hotspot);
@@ -80,9 +78,6 @@ class PrinterActivity final : public Activity {
   void loadQueue();
   void savePageToQueue();
   void showQueueEntry(int index);
-  void deleteCurrentPage();
-  void clearQueue();
-  void openOptions();
   void drawPageHints() const;
   void renderModeSelect() const;
   void renderWaitingScreen() const;

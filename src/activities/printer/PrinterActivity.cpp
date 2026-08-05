@@ -324,23 +324,18 @@ void PrinterActivity::loop() {
 
   mappedInput.update();
 
-  if (optionPopup.isActive()) {
-    optionPopup.handleInput(mappedInput, [this] { requestUpdate(); });
-    // Dismissed without picking anything (the actions repaint themselves):
-    // restore the page that the popup was covering.
-    if (!optionPopup.isActive() && state == PrinterState::PAGE_SHOWING) showQueueEntry(queueIndex);
-    return;
-  }
-
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
-    onGoHome(HomeMenuItem::PRINTER);
+    // Back steps out one level: from a printout back to the printer screen,
+    // and only from the printer screen out to home.
+    if (state == PrinterState::PAGE_SHOWING) {
+      state = PrinterState::RUNNING;
+      requestUpdate();
+    } else {
+      onGoHome(HomeMenuItem::PRINTER);
+    }
     return;
   }
   if (state == PrinterState::PAGE_SHOWING) {
-    if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
-      openOptions();
-      return;
-    }
     if (mappedInput.wasPressed(MappedInputManager::Button::Left) && queueIndex > 0) {
       showQueueEntry(queueIndex - 1);
       return;
@@ -441,50 +436,9 @@ void PrinterActivity::showQueueEntry(const int index) {
 void PrinterActivity::drawPageHints() const {
   const bool hasPrev = queueIndex > 0;
   const bool hasNext = queueIndex >= 0 && queueIndex < static_cast<int>(queue.size()) - 1;
-  const auto labels =
-      mappedInput.mapLabels(tr(STR_EXIT), tr(STR_PRINTER_OPTIONS), hasPrev ? "<" : "", hasNext ? ">" : "");
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", hasPrev ? "<" : "", hasNext ? ">" : "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-}
-
-void PrinterActivity::deleteCurrentPage() {
-  if (queueIndex < 0 || queueIndex >= static_cast<int>(queue.size())) return;
-  const std::string path = std::string(QUEUE_DIR) + "/" + queue[queueIndex];
-  if (!Storage.remove(path.c_str())) LOG_ERR("PRINT", "Delete failed: %s", path.c_str());
-  queue.erase(queue.begin() + queueIndex);
-
-  if (queue.empty()) {
-    queueIndex = -1;
-    state = PrinterState::RUNNING;
-    requestUpdate();
-    return;
-  }
-  if (queueIndex >= static_cast<int>(queue.size())) queueIndex = static_cast<int>(queue.size()) - 1;
-  showQueueEntry(queueIndex);
-}
-
-void PrinterActivity::clearQueue() {
-  for (const auto& name : queue) {
-    const std::string path = std::string(QUEUE_DIR) + "/" + name;
-    if (!Storage.remove(path.c_str())) LOG_ERR("PRINT", "Delete failed: %s", path.c_str());
-  }
-  LOG_DBG("PRINT", "Queue cleared (%d removed)", static_cast<int>(queue.size()));
-  queue.clear();
-  queueIndex = -1;
-  state = PrinterState::RUNNING;
-  requestUpdate();
-}
-
-void PrinterActivity::openOptions() {
-  static constexpr StrId options[] = {StrId::STR_DELETE, StrId::STR_PRINTER_CLEAR_QUEUE};
-  optionPopup.show(StrId::STR_PRINTER_OPTIONS, options, 2, 0, [this](int selected) {
-    if (selected == 0) {
-      deleteCurrentPage();
-    } else if (selected == 1) {
-      clearQueue();
-    }
-  });
-  requestUpdate();
 }
 
 void PrinterActivity::renderModeSelect() const {
@@ -570,11 +524,7 @@ void PrinterActivity::render(RenderLock&&) {
       break;
     case PrinterState::PAGE_SHOWING:
       // The page is drawn straight into the framebuffer as rows decode, so
-      // there is nothing to repaint here — only the popup floats above it.
-      if (optionPopup.isActive()) {
-        optionPopup.render(renderer);
-        renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-      }
+      // there is nothing to repaint here — leave what is on the panel.
       break;
     case PrinterState::WIFI_SELECTING:
     case PrinterState::FAILED:
