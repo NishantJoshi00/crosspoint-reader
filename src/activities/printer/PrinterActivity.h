@@ -8,16 +8,18 @@
 #include "network/ipp/HttpIppConnection.h"
 #include "network/ipp/IppPrintService.h"
 #include "network/ipp/PageScaler.h"
+#include "util/ButtonNavigator.h"
 
-// Printer Mode: the X3 raises its own Wi-Fi AP, advertises itself over mDNS as
-// an IPP/AirPrint printer, and renders whatever a computer prints to it on the
-// e-ink panel. Confirm saves the shown page to /printouts as BMP.
+// Printer Mode: the X3 ("penguin") becomes an IPP/AirPrint printer. Join an
+// existing network (STA — computer keeps internet) or raise the
+// "literate-penguin" hotspot (portable), then anything printed to "penguin"
+// renders on the e-ink panel with a paper-feed reveal effect. Confirm saves
+// the page to /printouts as BMP; Left aborts/clears any in-flight job; Back
+// exits.
 //
-// All protocol work lives in src/network/ipp (host-tested against real macOS
-// print jobs); this activity provides the WiFi transport, screen, and
-// lifecycle. Everything is allocated in onEnter and released in onExit; like
-// CrossPointWebServerActivity we silent-restart on exit for a clean WiFi
-// state.
+// Protocol core in src/network/ipp, host-tested against real macOS jobs.
+// Everything allocates in onEnter and frees in onExit; silent-restart on exit
+// after WiFi use (CrossPointWebServerActivity convention).
 class PrinterActivity final : public Activity {
  public:
   explicit PrinterActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -27,12 +29,11 @@ class PrinterActivity final : public Activity {
   void loop() override;
   void render(RenderLock&&) override;
   bool skipLoopDelay() override { return state == PrinterState::RUNNING || state == PrinterState::PAGE_SHOWING; }
-  bool preventAutoSleep() override { return state != PrinterState::FAILED; }
+  bool preventAutoSleep() override { return state == PrinterState::RUNNING || state == PrinterState::PAGE_SHOWING; }
 
  private:
-  enum class PrinterState : uint8_t { STARTING, RUNNING, PAGE_SHOWING, FAILED };
+  enum class PrinterState : uint8_t { MODE_SELECT, WIFI_SELECTING, STARTING, RUNNING, PAGE_SHOWING, FAILED };
 
-  // ScaledPageSink bridging decoded pages into the activity.
   class Sink final : public ScaledPageSink {
     PrinterActivity& activity;
 
@@ -42,9 +43,13 @@ class PrinterActivity final : public Activity {
     void onScaledPageEnd(bool ok, uint32_t pageIndex) override;
   };
 
-  PrinterState state = PrinterState::STARTING;
-  std::string apSsid;
-  std::string apIp;
+  PrinterState state = PrinterState::MODE_SELECT;
+  ButtonNavigator buttonNavigator;
+  int modeIndex = 0;
+  bool isApMode = false;
+
+  std::string netSsid;
+  std::string netIp;
   char printerUri[48] = {0};
   char moreInfoUrl[32] = {0};
 
@@ -56,12 +61,17 @@ class PrinterActivity final : public Activity {
   bool serverStarted = false;
 
   int pagesReceived = 0;
-  bool exitRequested = false;
+  bool revealPending = false;  // next page render uses the paper-feed effect
   unsigned long savedBannerUntil = 0;
 
+  void beginModeSelect();
+  void onModeChosen(bool hotspot);
   bool startAccessPoint();
+  void startServices();
   void startMdns();
+  void clearJob();  // Left: back to the waiting screen, drop shown page
   void savePageToInbox();
+  void renderModeSelect() const;
   void renderWaitingScreen() const;
-  void renderPage() const;
+  void renderPage(bool reveal);
 };

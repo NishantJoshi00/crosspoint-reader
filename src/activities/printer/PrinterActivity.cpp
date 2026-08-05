@@ -7,6 +7,7 @@
 #include <WiFi.h>
 
 #include "SilentRestart.h"
+#include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/QrUtils.h"
@@ -15,24 +16,28 @@
 
 namespace {
 
-constexpr const char* AP_SSID = "CrossPoint-X3";
-constexpr const char* AP_HOSTNAME = "crosspoint";
+constexpr const char* AP_SSID = "literate-penguin";
+constexpr const char* HOSTNAME = "penguin";
+constexpr const char* PRINTER_NAME = "penguin";
 constexpr uint8_t AP_CHANNEL = 1;
 constexpr uint8_t AP_MAX_CONNECTIONS = 2;
 constexpr uint16_t IPP_PORT = 631;
 constexpr unsigned long CLIENT_READ_TIMEOUT_MS = 2500;
 constexpr int QR_SIZE = 198;
+constexpr int MODE_ITEM_COUNT = 2;
+constexpr int REVEAL_STEPS = 4;  // paper-feed bands; ~2s total with fast refreshes
 
 uint32_t upTimeSeconds() { return millis() / 1000; }
 
-// IppTransport over a connected NetworkClient. While blocked waiting for
-// bytes it pumps input (so Back stays responsive) and feeds the watchdog.
+// IppTransport over a connected NetworkClient. While waiting for bytes it
+// pumps input (Back aborts-and-exits, Left aborts-and-stays) and the watchdog.
 class WiFiClientTransport final : public IppTransport {
   NetworkClient& client;
   MappedInputManager& input;
 
  public:
   bool backPressed = false;
+  bool clearPressed = false;
 
   WiFiClientTransport(NetworkClient& client, MappedInputManager& input) : client(client), input(input) {}
 
@@ -40,15 +45,16 @@ class WiFiClientTransport final : public IppTransport {
     const unsigned long start = millis();
     while (client.connected()) {
       const int avail = client.available();
-      if (avail > 0) {
-        const int n = client.read(buf, maxLen);
-        return n;
-      }
+      if (avail > 0) return client.read(buf, maxLen);
       if (millis() - start > CLIENT_READ_TIMEOUT_MS) return -1;
       resetTaskWatchdogIfSubscribed();
       input.update();
       if (input.wasPressed(MappedInputManager::Button::Back)) {
         backPressed = true;
+        return -1;
+      }
+      if (input.wasPressed(MappedInputManager::Button::Left)) {
+        clearPressed = true;
         return -1;
       }
       delay(2);
@@ -79,19 +85,15 @@ void PrinterActivity::Sink::onScaledPageEnd(bool ok, uint32_t pageIndex) {
   if (!ok) return;
   activity.pagesReceived++;
   activity.state = PrinterState::PAGE_SHOWING;
-  // Called from the main-loop task (inside connection serving), so a blocking
-  // render is safe and shows the page before the job response goes out.
+  activity.revealPending = true;
+  // Main-loop task context (inside connection serving): block until the page
+  // (with its reveal effect) is on screen before the job response goes out.
   activity.requestUpdateAndWait();
 }
 
 void PrinterActivity::onEnter() {
   Activity::onEnter();
   LOG_DBG("PRINT", "Free heap at onEnter: %d", ESP.getFreeHeap());
-
-  state = PrinterState::STARTING;
-  pagesReceived = 0;
-  exitRequested = false;
-  requestUpdateAndWait();
 
   const int pageW = renderer.getScreenWidth();
   const int pageH = renderer.getScreenHeight();
@@ -104,23 +106,78 @@ void PrinterActivity::onEnter() {
     return;
   }
 
-  if (!startAccessPoint()) {
-    state = PrinterState::FAILED;
-    onGoHome(HomeMenuItem::PRINTER);
+  beginModeSelect();
+}
+
+void PrinterActivity::beginModeSelect() {
+  state = PrinterState::MODE_SELECT;
+  modeIndex = 0;
+  requestUpdate();
+}
+
+void PrinterActivity::onModeChosen(const bool hotspot) {
+  isApMode = hotspot;
+  state = PrinterState::STARTING;
+  requestUpdateAndWait();
+
+  if (hotspot) {
+    if (!startAccessPoint()) {
+      state = PrinterState::FAILED;
+      onGoHome(HomeMenuItem::PRINTER);
+      return;
+    }
+    startServices();
     return;
   }
 
-  snprintf(printerUri, sizeof(printerUri), "ipp://%s:%u/ipp/print", apIp.c_str(), IPP_PORT);
-  snprintf(moreInfoUrl, sizeof(moreInfoUrl), "http://%s/", apIp.c_str());
+  // Join Network: WifiSelectionActivity handles scan/pick/password/connect.
+  WiFi.mode(WIFI_STA);
+  state = PrinterState::WIFI_SELECTING;
+  startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
+                         [this](const ActivityResult& result) {
+                           if (result.isCancelled) {
+                             beginModeSelect();
+                             return;
+                           }
+                           const auto& wifi = std::get<WifiResult>(result.data);
+                           netSsid = wifi.ssid;
+                           netIp = wifi.ip;
+                           startServices();
+                         });
+}
+
+bool PrinterActivity::startAccessPoint() {
+  LOG_DBG("PRINT", "Starting AP '%s'...", AP_SSID);
+  WiFi.mode(WIFI_AP);
+  delay(100);
+  if (!WiFi.softAP(AP_SSID, nullptr, AP_CHANNEL, false, AP_MAX_CONNECTIONS)) {
+    LOG_ERR("PRINT", "Failed to start AP");
+    return false;
+  }
+  delay(100);
+  const IPAddress ip = WiFi.softAPIP();
+  char ipStr[16];
+  snprintf(ipStr, sizeof(ipStr), "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+  netIp = ipStr;
+  netSsid = AP_SSID;
+  LOG_DBG("PRINT", "AP up: %s @ %s", netSsid.c_str(), netIp.c_str());
+  return true;
+}
+
+void PrinterActivity::startServices() {
+  snprintf(printerUri, sizeof(printerUri), "ipp://%s:%u/ipp/print", netIp.c_str(), IPP_PORT);
+  snprintf(moreInfoUrl, sizeof(moreInfoUrl), "http://%s/", netIp.c_str());
 
   IppServiceConfig cfg;
-  cfg.printerName = "CrossPoint X3";
-  cfg.makeAndModel = "CrossPoint E-Reader Printer";
+  cfg.printerName = PRINTER_NAME;
+  cfg.makeAndModel = "CrossPoint X3 E-Reader";
   cfg.printerUri = printerUri;
   cfg.moreInfoUrl = moreInfoUrl;
 
   sink = makeUniqueNoThrow<Sink>(*this);
-  if (sink) service = makeUniqueNoThrow<IppPrintService>(cfg, *sink, pageBits.get(), pageW, pageH);
+  if (sink)
+    service = makeUniqueNoThrow<IppPrintService>(cfg, *sink, pageBits.get(), renderer.getScreenWidth(),
+                                                 renderer.getScreenHeight());
   if (service) connection = makeUniqueNoThrow<HttpIppConnection>(*service, cfg.maxJobBytes);
   if (!connection) {
     LOG_ERR("PRINT", "OOM: IPP service");
@@ -139,27 +196,9 @@ void PrinterActivity::onEnter() {
   requestUpdate();
 }
 
-bool PrinterActivity::startAccessPoint() {
-  LOG_DBG("PRINT", "Starting AP...");
-  WiFi.mode(WIFI_AP);
-  delay(100);
-  if (!WiFi.softAP(AP_SSID, nullptr, AP_CHANNEL, false, AP_MAX_CONNECTIONS)) {
-    LOG_ERR("PRINT", "Failed to start AP");
-    return false;
-  }
-  delay(100);
-  const IPAddress ip = WiFi.softAPIP();
-  char ipStr[16];
-  snprintf(ipStr, sizeof(ipStr), "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
-  apIp = ipStr;
-  apSsid = AP_SSID;
-  LOG_DBG("PRINT", "AP up: %s @ %s", apSsid.c_str(), apIp.c_str());
-  return true;
-}
-
 void PrinterActivity::startMdns() {
   MDNS.end();
-  if (!MDNS.begin(AP_HOSTNAME)) {
+  if (!MDNS.begin(HOSTNAME)) {
     // Direct ipp://<ip> printing still works without discovery.
     LOG_ERR("PRINT", "mDNS failed to start");
     return;
@@ -168,7 +207,7 @@ void PrinterActivity::startMdns() {
   MDNS.addServiceTxt("ipp", "tcp", "txtvers", "1");
   MDNS.addServiceTxt("ipp", "tcp", "qtotal", "1");
   MDNS.addServiceTxt("ipp", "tcp", "rp", "ipp/print");
-  MDNS.addServiceTxt("ipp", "tcp", "ty", "CrossPoint X3");
+  MDNS.addServiceTxt("ipp", "tcp", "ty", PRINTER_NAME);
   MDNS.addServiceTxt("ipp", "tcp", "note", "E-Reader");
   MDNS.addServiceTxt("ipp", "tcp", "pdl", "image/urf,image/pwg-raster");
   MDNS.addServiceTxt("ipp", "tcp", "URF", "V1.4,W8,SRGB24,CP1,RS300,DM1");
@@ -176,7 +215,7 @@ void PrinterActivity::startMdns() {
   MDNS.addServiceTxt("ipp", "tcp", "Duplex", "F");
   MDNS.addServiceTxt("ipp", "tcp", "UUID", "8e7a24f2-1f0b-4c9e-9d3a-c0ffee000e01");
   MDNS.addServiceTxt("ipp", "tcp", "adminurl", static_cast<const char*>(moreInfoUrl));
-  LOG_DBG("PRINT", "mDNS: _ipp._tcp advertised");
+  LOG_DBG("PRINT", "mDNS: _ipp._tcp advertised as '%s'", PRINTER_NAME);
 }
 
 void PrinterActivity::onExit() {
@@ -191,13 +230,60 @@ void PrinterActivity::onExit() {
   // Same convention as CrossPointWebServerActivity: restart silently after
   // WiFi use so the radio and heap come back to a known state.
   if (WiFi.getMode() != WIFI_MODE_NULL) {
-    WiFi.softAPdisconnect(true);
+    if (isApMode) {
+      WiFi.softAPdisconnect(true);
+    } else {
+      WiFi.disconnect(false);
+    }
     delay(30);
     silentRestart();
   }
 }
 
+void PrinterActivity::clearJob() {
+  LOG_DBG("PRINT", "Clear: dropping shown page, back to waiting");
+  state = PrinterState::RUNNING;
+  revealPending = false;
+  savedBannerUntil = 0;
+  requestUpdate();
+}
+
 void PrinterActivity::loop() {
+  if (state == PrinterState::MODE_SELECT) {
+    auto selectCurrent = [this] { onModeChosen(modeIndex == 1); };
+
+    if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+      onGoHome(HomeMenuItem::PRINTER);
+      return;
+    }
+    if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+      selectCurrent();
+      return;
+    }
+    const auto& metrics = UITheme::getInstance().getMetrics();
+    const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+    const int contentHeight =
+        renderer.getScreenHeight() - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
+    switch (handleListTouch(modeIndex, MODE_ITEM_COUNT, contentTop, contentHeight, true)) {
+      case ListTouchResult::Activated:
+        selectCurrent();
+        return;
+      case ListTouchResult::Consumed:
+        return;
+      case ListTouchResult::None:
+        break;
+    }
+    buttonNavigator.onNext([this] {
+      modeIndex = ButtonNavigator::nextIndex(modeIndex, MODE_ITEM_COUNT);
+      requestUpdate();
+    });
+    buttonNavigator.onPrevious([this] {
+      modeIndex = ButtonNavigator::previousIndex(modeIndex, MODE_ITEM_COUNT);
+      requestUpdate();
+    });
+    return;
+  }
+
   if (state != PrinterState::RUNNING && state != PrinterState::PAGE_SHOWING) return;
 
   mappedInput.update();
@@ -205,8 +291,12 @@ void PrinterActivity::loop() {
     onGoHome(HomeMenuItem::PRINTER);
     return;
   }
-  if (state == PrinterState::PAGE_SHOWING && mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
-    savePageToInbox();
+  if (state == PrinterState::PAGE_SHOWING) {
+    if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) savePageToInbox();
+    if (mappedInput.wasPressed(MappedInputManager::Button::Left)) {
+      clearJob();
+      return;
+    }
   }
   if (savedBannerUntil != 0 && millis() > savedBannerUntil) {
     savedBannerUntil = 0;
@@ -223,6 +313,8 @@ void PrinterActivity::loop() {
     LOG_DBG("PRINT", "client done, free heap: %d", ESP.getFreeHeap());
     if (transport.backPressed) {
       onGoHome(HomeMenuItem::PRINTER);
+    } else if (transport.clearPressed) {
+      clearJob();
     }
   }
 }
@@ -241,25 +333,49 @@ void PrinterActivity::savePageToInbox() {
   }
 }
 
+void PrinterActivity::renderModeSelect() const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const auto pageWidth = renderer.getScreenWidth();
+  const auto pageHeight = renderer.getScreenHeight();
+
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_PRINTER_MODE));
+
+  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
+  static constexpr StrId modeItems[MODE_ITEM_COUNT] = {StrId::STR_JOIN_NETWORK, StrId::STR_CREATE_HOTSPOT};
+  static constexpr StrId modeDescs[MODE_ITEM_COUNT] = {StrId::STR_JOIN_DESC, StrId::STR_HOTSPOT_DESC};
+  static constexpr UIIcon modeIcons[MODE_ITEM_COUNT] = {UIIcon::Wifi, UIIcon::Hotspot};
+
+  GUI.drawList(
+      renderer, Rect{0, contentTop, pageWidth, contentHeight}, MODE_ITEM_COUNT, modeIndex,
+      [](int index) { return std::string(I18N.get(modeItems[index])); },
+      [](int index) { return std::string(I18N.get(modeDescs[index])); }, [](int index) { return modeIcons[index]; });
+
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+}
+
 void PrinterActivity::renderWaitingScreen() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int pageWidth = renderer.getScreenWidth();
 
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_PRINTER_MODE), nullptr);
   GUI.drawSubHeader(renderer, Rect{0, metrics.topPadding + metrics.headerHeight, pageWidth, metrics.tabBarHeight},
-                    apSsid.c_str());
+                    netSsid.c_str());
 
   const int height10 = renderer.getLineHeight(UI_10_FONT_ID);
   int y = metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing * 2;
 
-  renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, y, tr(STR_CONNECT_WIFI_HINT), true, EpdFontFamily::BOLD);
-  y += height10 + metrics.verticalSpacing * 2;
-
-  const std::string wifiConfig = std::string("WIFI:T:nopass;S:") + apSsid + ";;";
-  QrUtils::drawQrCode(renderer, Rect(metrics.contentSidePadding, y, QR_SIZE, QR_SIZE), wifiConfig);
-  renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding + QR_SIZE + metrics.verticalSpacing, y + 80,
-                    apSsid.c_str());
-  y += QR_SIZE + metrics.verticalSpacing * 2;
+  if (isApMode) {
+    renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, y, tr(STR_CONNECT_WIFI_HINT), true,
+                      EpdFontFamily::BOLD);
+    y += height10 + metrics.verticalSpacing * 2;
+    const std::string wifiConfig = std::string("WIFI:T:nopass;S:") + netSsid + ";;";
+    QrUtils::drawQrCode(renderer, Rect(metrics.contentSidePadding, y, QR_SIZE, QR_SIZE), wifiConfig);
+    renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding + QR_SIZE + metrics.verticalSpacing, y + 80,
+                      netSsid.c_str());
+    y += QR_SIZE + metrics.verticalSpacing * 2;
+  }
 
   renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, y, tr(STR_PRINTER_PRINT_HINT), true,
                     EpdFontFamily::BOLD);
@@ -270,41 +386,66 @@ void PrinterActivity::renderWaitingScreen() const {
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
-void PrinterActivity::renderPage() const {
+void PrinterActivity::renderPage(const bool reveal) {
   const int w = renderer.getScreenWidth();
   const int h = renderer.getScreenHeight();
   const int stride = (w + 7) / 8;
   const uint8_t* bits = pageBits.get();
 
-  for (int y = 0; y < h; y++) {
-    const uint8_t* row = bits + static_cast<size_t>(y) * stride;
-    for (int x = 0; x < w; x++) {
-      if (row[x >> 3] & (0x80 >> (x & 7))) renderer.drawPixel(x, y, true);
+  auto drawRows = [&](int y0, int y1) {
+    for (int y = y0; y < y1; y++) {
+      const uint8_t* row = bits + static_cast<size_t>(y) * stride;
+      for (int x = 0; x < w; x++) {
+        if (row[x >> 3] & (0x80 >> (x & 7))) renderer.drawPixel(x, y, true);
+      }
     }
+  };
+
+  if (reveal) {
+    // Paper-feed effect: reveal in bands top to bottom with fast refreshes
+    // (~2s total), ending with the full page on screen.
+    for (int step = 1; step <= REVEAL_STEPS; step++) {
+      const int upTo = h * step / REVEAL_STEPS;
+      drawRows(h * (step - 1) / REVEAL_STEPS, upTo);
+      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+      resetTaskWatchdogIfSubscribed();
+    }
+    return;
   }
 
+  drawRows(0, h);
   if (savedBannerUntil != 0) {
     const int height10 = renderer.getLineHeight(UI_10_FONT_ID);
     renderer.fillRect(0, h - height10 - 8, w, height10 + 8, false);
     renderer.drawCenteredText(UI_10_FONT_ID, h - height10 - 4, tr(STR_PRINTER_PAGE_SAVED), true, EpdFontFamily::BOLD);
   }
+  renderer.displayBuffer();
 }
 
 void PrinterActivity::render(RenderLock&&) {
   renderer.clearScreen();
   switch (state) {
+    case PrinterState::MODE_SELECT:
+      renderModeSelect();
+      renderer.displayBuffer();
+      break;
     case PrinterState::STARTING:
       renderer.drawCenteredText(UI_10_FONT_ID, (renderer.getScreenHeight() - renderer.getLineHeight(UI_10_FONT_ID)) / 2,
                                 tr(STR_PRINTER_STARTING));
+      renderer.displayBuffer();
       break;
     case PrinterState::RUNNING:
       renderWaitingScreen();
+      renderer.displayBuffer();
       break;
-    case PrinterState::PAGE_SHOWING:
-      renderPage();
+    case PrinterState::PAGE_SHOWING: {
+      const bool reveal = revealPending;
+      revealPending = false;
+      renderPage(reveal);
       break;
+    }
+    case PrinterState::WIFI_SELECTING:
     case PrinterState::FAILED:
       break;
   }
-  renderer.displayBuffer();
 }
