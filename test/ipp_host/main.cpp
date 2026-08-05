@@ -54,21 +54,37 @@ class SocketTransport final : public IppTransport {
   }
 };
 
+// The firmware draws rows straight into the panel framebuffer; the harness
+// accumulates them into a page image so the result can be inspected.
 class PbmSink final : public ScaledPageSink {
-  const uint8_t* bits;
+  uint8_t page[PAGE_STRIDE * PAGE_H];
   int pagesWritten = 0;
+  int rowsSeen = 0;
 
  public:
-  explicit PbmSink(const uint8_t* bits) : bits(bits) {}
+  bool onScaledPageBegin(uint32_t pageIndex, int boxX, int boxY, int boxW, int boxH) override {
+    fprintf(stderr, "[sink] page %u begin, box %dx%d at (%d,%d)\n", pageIndex, boxW, boxH, boxX, boxY);
+    memset(page, 0, sizeof(page));
+    rowsSeen = 0;
+    return true;
+  }
 
-  bool onScaledPageBegin(uint32_t pageIndex) override {
-    fprintf(stderr, "[sink] page %u begin\n", pageIndex);
+  bool onScaledRow(int y, int xOffset, const uint8_t* rowBits, int width) override {
+    if (y < 0 || y >= PAGE_H) return false;
+    uint8_t* out = page + static_cast<size_t>(y) * PAGE_STRIDE;
+    for (int x = 0; x < width; x++) {
+      if (rowBits[x >> 3] & (0x80 >> (x & 7))) {
+        const int gx = xOffset + x;
+        if (gx >= 0 && gx < PAGE_W) out[gx >> 3] |= static_cast<uint8_t>(0x80 >> (gx & 7));
+      }
+    }
+    rowsSeen++;
     return true;
   }
 
   void onScaledPageEnd(bool ok, uint32_t pageIndex) override {
     if (!ok) {
-      fprintf(stderr, "[sink] page %u aborted\n", pageIndex);
+      fprintf(stderr, "[sink] page %u aborted after %d rows\n", pageIndex, rowsSeen);
       return;
     }
     char name[64];
@@ -76,9 +92,9 @@ class PbmSink final : public ScaledPageSink {
     FILE* f = fopen(name, "wb");
     if (!f) return;
     fprintf(f, "P4\n%d %d\n", PAGE_W, PAGE_H);
-    fwrite(bits, 1, static_cast<size_t>(PAGE_STRIDE) * PAGE_H, f);
+    fwrite(page, 1, sizeof(page), f);
     fclose(f);
-    fprintf(stderr, "[sink] wrote %s\n", name);
+    fprintf(stderr, "[sink] wrote %s (%d rows)\n", name, rowsSeen);
   }
 };
 
@@ -88,15 +104,14 @@ int main(int argc, char** argv) {
   const int port = argc > 1 ? atoi(argv[1]) : 6310;
   startTime = time(nullptr);
 
-  static uint8_t pageBits[PAGE_STRIDE * PAGE_H];
-  static PbmSink sink(pageBits);
+  static PbmSink sink;
 
   IppServiceConfig cfg;
   char uri[64];
   snprintf(uri, sizeof(uri), "ipp://localhost:%d/ipp/print", port);
   cfg.printerUri = uri;
 
-  static IppPrintService service(cfg, sink, pageBits, PAGE_W, PAGE_H);
+  static IppPrintService service(cfg, sink, PAGE_W, PAGE_H);
   static HttpIppConnection conn(service, cfg.maxJobBytes);
 
   const int listenFd = socket(AF_INET, SOCK_STREAM, 0);

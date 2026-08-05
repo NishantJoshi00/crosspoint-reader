@@ -30,8 +30,8 @@ struct IppServiceConfig {
 
 class IppPrintService {
  public:
-  IppPrintService(const IppServiceConfig& cfg, ScaledPageSink& pageConsumer, uint8_t* pageBits, int pageW, int pageH)
-      : cfg(cfg), scaler(pageBits, pageW, pageH, pageConsumer), decoder(scaler) {}
+  IppPrintService(const IppServiceConfig& cfg, ScaledPageSink& pageConsumer, int pageW, int pageH)
+      : cfg(cfg), scaler(pageW, pageH, pageConsumer), decoder(scaler) {}
 
   // Handles one parsed request; encodes the IPP response into out. For
   // Print-Job this consumes document data from `body`. upTimeSeconds feeds the

@@ -4,20 +4,18 @@
 
 #include "IppLog.h"
 
-PageScaler::PageScaler(uint8_t* outBits, int outW, int outH, ScaledPageSink& consumer)
-    : outBits(outBits), outW(outW), outH(outH), outStride((outW + 7) / 8), consumer(consumer) {}
+PageScaler::PageScaler(int outW, int outH, ScaledPageSink& consumer) : outW(outW), outH(outH), consumer(consumer) {}
 
 bool PageScaler::onPageBegin(uint32_t widthPx, uint32_t heightPx, uint32_t dpi, uint32_t pageIndex) {
   (void)dpi;
+  if (widthPx == 0 || heightPx == 0) return false;
   srcW = widthPx;
   srcH = heightPx;
   srcY = 0;
   curPage = pageIndex;
+  aborted = false;
 
-  // Fit source into target preserving aspect; center the letterbox.
-  // 64-bit intermediates: 2550 * 800 overflows int32? (2550*800=2M — fine),
-  // but height*width products reach 2550*3300*800 in the mapping math below,
-  // so the per-pixel mapping uses precomputed box bounds instead.
+  // Fit source into target preserving aspect; centre the letterbox.
   int w = outW;
   int h = static_cast<int>(static_cast<uint64_t>(outW) * srcH / srcW);
   if (h > outH) {
@@ -27,19 +25,19 @@ bool PageScaler::onPageBegin(uint32_t widthPx, uint32_t heightPx, uint32_t dpi, 
   }
   if (w < 1) w = 1;
   if (h < 1) h = 1;
+  if (w > MAX_TARGET_WIDTH) w = MAX_TARGET_WIDTH;
   boxW = w;
   boxH = h;
   boxX = (outW - w) / 2;
   boxY = (outH - h) / 2;
 
-  memset(outBits, 0x00, static_cast<size_t>(outStride) * outH);  // all white
   memset(err, 0, sizeof(err));
   resetAccumulators();
   curTargetRow = 0;
   active = true;
 
   IPP_LOG_DBG("scale %ux%u -> box %dx%d at (%d,%d)", srcW, srcH, boxW, boxH, boxX, boxY);
-  return consumer.onScaledPageBegin(pageIndex);
+  return consumer.onScaledPageBegin(pageIndex, boxX, boxY, boxW, boxH);
 }
 
 void PageScaler::resetAccumulators() {
@@ -51,10 +49,10 @@ bool PageScaler::onRow(const uint8_t* gray, uint32_t widthPx, uint32_t repeatCou
   if (!active || widthPx != srcW) return false;
 
   for (uint32_t rep = 0; rep < repeatCount && srcY < srcH; rep++, srcY++) {
-    // Target row this source row lands in (box filter partitioning).
     const int ty = static_cast<int>(static_cast<uint64_t>(srcY) * boxH / srcH);
     if (ty != curTargetRow) {
       flushTargetRow();
+      if (aborted) return false;
       curTargetRow = ty;
     }
     for (uint32_t sx = 0; sx < srcW; sx++) {
@@ -71,10 +69,8 @@ void PageScaler::flushTargetRow() {
     resetAccumulators();
     return;
   }
-  uint8_t* rowOut = outBits + static_cast<size_t>(boxY + curTargetRow) * outStride;
 
-  // Floyd-Steinberg over the box-filtered row. err[] carries spill into the
-  // next row; nextErr accumulates it then swaps back.
+  memset(rowBits, 0, sizeof(rowBits));
   memset(nextErr, 0, sizeof(nextErr));
 
   int carryRight = 0;
@@ -89,18 +85,17 @@ void PageScaler::flushTargetRow() {
     nextErr[x] += static_cast<int16_t>((e * 3) / 16);      // below-left
     nextErr[x + 1] += static_cast<int16_t>((e * 5) / 16);  // below
     nextErr[x + 2] += static_cast<int16_t>(e / 16);        // below-right
-    if (out == 0) {
-      const int gx = boxX + x;
-      rowOut[gx >> 3] |= static_cast<uint8_t>(0x80 >> (gx & 7));
-    }
+    if (out == 0) rowBits[x >> 3] |= static_cast<uint8_t>(0x80 >> (x & 7));
   }
   memcpy(err, nextErr, sizeof(err));
   resetAccumulators();
+
+  if (!consumer.onScaledRow(boxY + curTargetRow, boxX, rowBits, boxW)) aborted = true;
 }
 
 void PageScaler::onPageEnd(bool ok) {
   if (!active) return;
-  if (ok) flushTargetRow();
+  if (ok && !aborted) flushTargetRow();
   active = false;
-  consumer.onScaledPageEnd(ok, curPage);
+  consumer.onScaledPageEnd(ok && !aborted, curPage);
 }

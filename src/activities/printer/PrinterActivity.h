@@ -34,12 +34,16 @@ class PrinterActivity final : public Activity {
  private:
   enum class PrinterState : uint8_t { MODE_SELECT, WIFI_SELECTING, STARTING, RUNNING, PAGE_SHOWING, FAILED };
 
+  // Draws decoded rows straight into the panel framebuffer — no page-sized
+  // staging buffer (48 KB the device does not have with WiFi up).
   class Sink final : public ScaledPageSink {
     PrinterActivity& activity;
+    int nextRevealY = 0;
 
    public:
     explicit Sink(PrinterActivity& a) : activity(a) {}
-    bool onScaledPageBegin(uint32_t pageIndex) override;
+    bool onScaledPageBegin(uint32_t pageIndex, int boxX, int boxY, int boxW, int boxH) override;
+    bool onScaledRow(int y, int xOffset, const uint8_t* rowBits, int width) override;
     void onScaledPageEnd(bool ok, uint32_t pageIndex) override;
   };
 
@@ -53,7 +57,6 @@ class PrinterActivity final : public Activity {
   char printerUri[48] = {0};
   char moreInfoUrl[32] = {0};
 
-  std::unique_ptr<uint8_t[]> pageBits;
   std::unique_ptr<Sink> sink;
   std::unique_ptr<IppPrintService> service;
   std::unique_ptr<HttpIppConnection> connection;
@@ -61,8 +64,6 @@ class PrinterActivity final : public Activity {
   bool serverStarted = false;
 
   int pagesReceived = 0;
-  bool revealPending = false;  // next page render uses the paper-feed effect
-  unsigned long savedBannerUntil = 0;
 
   void beginModeSelect();
   void onModeChosen(bool hotspot);
@@ -73,5 +74,5 @@ class PrinterActivity final : public Activity {
   void savePageToInbox();
   void renderModeSelect() const;
   void renderWaitingScreen() const;
-  void renderPage(bool reveal);
+  void renderSavedBanner() const;
 };

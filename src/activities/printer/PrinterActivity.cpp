@@ -88,36 +88,45 @@ class WiFiClientTransport final : public IppTransport {
 
 }  // namespace
 
-bool PrinterActivity::Sink::onScaledPageBegin(uint32_t pageIndex) {
+bool PrinterActivity::Sink::onScaledPageBegin(uint32_t pageIndex, int boxX, int boxY, int boxW, int boxH) {
+  (void)boxX;
+  (void)boxW;
   LOG_DBG("PRINT", "Receiving page %u, free heap: %d", static_cast<unsigned>(pageIndex), ESP.getFreeHeap());
+  activity.state = PrinterState::PAGE_SHOWING;
+  activity.renderer.clearScreen();
+  nextRevealY = boxY + boxH / REVEAL_STEPS;
+  return true;
+}
+
+bool PrinterActivity::Sink::onScaledRow(int y, int xOffset, const uint8_t* rowBits, int width) {
+  GfxRenderer& renderer = activity.renderer;
+  for (int x = 0; x < width; x++) {
+    if (rowBits[x >> 3] & (0x80 >> (x & 7))) renderer.drawPixel(xOffset + x, y, true);
+  }
+  // Paper-feed reveal: push what has arrived every band boundary.
+  if (y >= nextRevealY) {
+    nextRevealY = y + activity.renderer.getScreenHeight() / REVEAL_STEPS;
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    resetTaskWatchdogIfSubscribed();
+  }
   return true;
 }
 
 void PrinterActivity::Sink::onScaledPageEnd(bool ok, uint32_t pageIndex) {
   (void)pageIndex;
-  if (!ok) return;
+  if (!ok) {
+    activity.state = PrinterState::RUNNING;
+    activity.requestUpdate();
+    return;
+  }
   activity.pagesReceived++;
-  activity.state = PrinterState::PAGE_SHOWING;
-  activity.revealPending = true;
-  // Main-loop task context (inside connection serving): block until the page
-  // (with its reveal effect) is on screen before the job response goes out.
-  activity.requestUpdateAndWait();
+  activity.renderer.displayBuffer();  // final full-quality pass
+  LOG_DBG("PRINT", "Page complete, free heap: %d", ESP.getFreeHeap());
 }
 
 void PrinterActivity::onEnter() {
   Activity::onEnter();
   LOG_DBG("PRINT", "Free heap at onEnter: %d", ESP.getFreeHeap());
-
-  const int pageW = renderer.getScreenWidth();
-  const int pageH = renderer.getScreenHeight();
-  const size_t bitsSize = static_cast<size_t>((pageW + 7) / 8) * pageH;
-  pageBits = makeUniqueNoThrow<uint8_t[]>(bitsSize);
-  if (!pageBits) {
-    LOG_ERR("PRINT", "OOM: %u byte page buffer", static_cast<unsigned>(bitsSize));
-    state = PrinterState::FAILED;
-    onGoHome(HomeMenuItem::PRINTER);
-    return;
-  }
 
   beginModeSelect();
 }
@@ -189,8 +198,7 @@ void PrinterActivity::startServices() {
 
   sink = makeUniqueNoThrow<Sink>(*this);
   if (sink)
-    service = makeUniqueNoThrow<IppPrintService>(cfg, *sink, pageBits.get(), renderer.getScreenWidth(),
-                                                 renderer.getScreenHeight());
+    service = makeUniqueNoThrow<IppPrintService>(cfg, *sink, renderer.getScreenWidth(), renderer.getScreenHeight());
   if (service) connection = makeUniqueNoThrow<HttpIppConnection>(*service, cfg.maxJobBytes);
   if (!connection) {
     LOG_ERR("PRINT", "OOM: IPP service");
@@ -248,7 +256,6 @@ void PrinterActivity::onExit() {
   connection.reset();
   service.reset();
   sink.reset();
-  pageBits.reset();
 
   // Same convention as CrossPointWebServerActivity: restart silently after
   // WiFi use so the radio and heap come back to a known state.
@@ -266,8 +273,6 @@ void PrinterActivity::onExit() {
 void PrinterActivity::clearJob() {
   LOG_DBG("PRINT", "Clear: dropping shown page, back to waiting");
   state = PrinterState::RUNNING;
-  revealPending = false;
-  savedBannerUntil = 0;
   requestUpdate();
 }
 
@@ -321,11 +326,6 @@ void PrinterActivity::loop() {
       return;
     }
   }
-  if (savedBannerUntil != 0 && millis() > savedBannerUntil) {
-    savedBannerUntil = 0;
-    requestUpdate();  // redraw the page without the banner
-  }
-
   NetworkClient client = server.accept();
   if (client) {
     LOG_DBG("PRINT", "client connected");
@@ -346,11 +346,11 @@ void PrinterActivity::savePageToInbox() {
   char path[48];
   snprintf(path, sizeof(path), "/printouts/print-%lu.bmp", millis());
   // The shown page IS the framebuffer, so the screenshot writer does the work.
+  // Save before stamping the banner so the file holds the clean page.
   if (ScreenshotUtil::saveFramebufferAsBmp(path, renderer.getFrameBuffer(), renderer.getDisplayWidth(),
                                            renderer.getDisplayHeight())) {
     LOG_DBG("PRINT", "Saved %s", path);
-    savedBannerUntil = millis() + 1500;
-    requestUpdate();
+    renderSavedBanner();
   } else {
     LOG_ERR("PRINT", "Save failed: %s", path);
   }
@@ -409,44 +409,19 @@ void PrinterActivity::renderWaitingScreen() const {
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
-void PrinterActivity::renderPage(const bool reveal) {
+void PrinterActivity::renderSavedBanner() const {
+  // The page itself already occupies the framebuffer; stamp the banner over it
+  // rather than repainting (there is no page copy to repaint from).
   const int w = renderer.getScreenWidth();
   const int h = renderer.getScreenHeight();
-  const int stride = (w + 7) / 8;
-  const uint8_t* bits = pageBits.get();
-
-  auto drawRows = [&](int y0, int y1) {
-    for (int y = y0; y < y1; y++) {
-      const uint8_t* row = bits + static_cast<size_t>(y) * stride;
-      for (int x = 0; x < w; x++) {
-        if (row[x >> 3] & (0x80 >> (x & 7))) renderer.drawPixel(x, y, true);
-      }
-    }
-  };
-
-  if (reveal) {
-    // Paper-feed effect: reveal in bands top to bottom with fast refreshes
-    // (~2s total), ending with the full page on screen.
-    for (int step = 1; step <= REVEAL_STEPS; step++) {
-      const int upTo = h * step / REVEAL_STEPS;
-      drawRows(h * (step - 1) / REVEAL_STEPS, upTo);
-      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-      resetTaskWatchdogIfSubscribed();
-    }
-    return;
-  }
-
-  drawRows(0, h);
-  if (savedBannerUntil != 0) {
-    const int height10 = renderer.getLineHeight(UI_10_FONT_ID);
-    renderer.fillRect(0, h - height10 - 8, w, height10 + 8, false);
-    renderer.drawCenteredText(UI_10_FONT_ID, h - height10 - 4, tr(STR_PRINTER_PAGE_SAVED), true, EpdFontFamily::BOLD);
-  }
-  renderer.displayBuffer();
+  const int height10 = renderer.getLineHeight(UI_10_FONT_ID);
+  renderer.fillRect(0, h - height10 - 8, w, height10 + 8, false);
+  renderer.drawCenteredText(UI_10_FONT_ID, h - height10 - 4, tr(STR_PRINTER_PAGE_SAVED), true, EpdFontFamily::BOLD);
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 }
 
 void PrinterActivity::render(RenderLock&&) {
-  renderer.clearScreen();
+  if (state != PrinterState::PAGE_SHOWING) renderer.clearScreen();
   switch (state) {
     case PrinterState::MODE_SELECT:
       renderModeSelect();
@@ -461,12 +436,10 @@ void PrinterActivity::render(RenderLock&&) {
       renderWaitingScreen();
       renderer.displayBuffer();
       break;
-    case PrinterState::PAGE_SHOWING: {
-      const bool reveal = revealPending;
-      revealPending = false;
-      renderPage(reveal);
+    case PrinterState::PAGE_SHOWING:
+      // The page is drawn straight into the framebuffer as rows decode, so
+      // there is nothing to repaint here — leave what is on the panel.
       break;
-    }
     case PrinterState::WIFI_SELECTING:
     case PrinterState::FAILED:
       break;
