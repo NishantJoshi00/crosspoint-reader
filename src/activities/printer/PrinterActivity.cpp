@@ -5,6 +5,7 @@
 #include <I18n.h>
 #include <Memory.h>
 #include <WiFi.h>
+#include <mdns.h>  // subtype API; ESPmDNS does not expose it
 
 #include "SilentRestart.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -32,8 +33,11 @@ uint32_t upTimeSeconds() { return millis() / 1000; }
 // IppTransport over a connected NetworkClient. While waiting for bytes it
 // pumps input (Back aborts-and-exits, Left aborts-and-stays) and the watchdog.
 class WiFiClientTransport final : public IppTransport {
+  static constexpr int YIELD_EVERY_READS = 32;
+
   NetworkClient& client;
   MappedInputManager& input;
+  int readsSinceYield = 0;
 
  public:
   bool backPressed = false;
@@ -45,7 +49,16 @@ class WiFiClientTransport final : public IppTransport {
     const unsigned long start = millis();
     while (client.connected()) {
       const int avail = client.available();
-      if (avail > 0) return client.read(buf, maxLen);
+      if (avail > 0) {
+        // A real job streams for many seconds without ever going idle, so the
+        // watchdog must be fed on the data path too — not just when waiting.
+        resetTaskWatchdogIfSubscribed();
+        if (++readsSinceYield >= YIELD_EVERY_READS) {
+          readsSinceYield = 0;
+          yield();
+        }
+        return client.read(buf, maxLen);
+      }
       if (millis() - start > CLIENT_READ_TIMEOUT_MS) return -1;
       resetTaskWatchdogIfSubscribed();
       input.update();
@@ -215,7 +228,17 @@ void PrinterActivity::startMdns() {
   MDNS.addServiceTxt("ipp", "tcp", "Duplex", "F");
   MDNS.addServiceTxt("ipp", "tcp", "UUID", "8e7a24f2-1f0b-4c9e-9d3a-c0ffee000e01");
   MDNS.addServiceTxt("ipp", "tcp", "adminurl", static_cast<const char*>(moreInfoUrl));
-  LOG_DBG("PRINT", "mDNS: _ipp._tcp advertised as '%s'", PRINTER_NAME);
+
+  // AirPrint clients only treat an _ipp._tcp service as a driverless printer
+  // when it also advertises the "_universal" subtype; without it macOS lists
+  // the printer but demands a driver. ESPmDNS has no subtype API, so call the
+  // underlying ESP-IDF mDNS component directly (nullptr instance/hostname =
+  // first matching service on the local host).
+  const esp_err_t subErr = mdns_service_subtype_add_for_host(nullptr, "_ipp", "_tcp", nullptr, "_universal");
+  if (subErr != ESP_OK) {
+    LOG_ERR("PRINT", "mDNS: _universal subtype failed (%d) — client may ask for a driver", subErr);
+  }
+  LOG_DBG("PRINT", "mDNS: _ipp._tcp,_universal advertised as '%s'", PRINTER_NAME);
 }
 
 void PrinterActivity::onExit() {
