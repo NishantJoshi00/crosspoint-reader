@@ -346,7 +346,8 @@ void PrinterActivity::loop() {
     }
   } else if (!queue.empty() && (mappedInput.wasPressed(MappedInputManager::Button::Left) ||
                                 mappedInput.wasPressed(MappedInputManager::Button::Right))) {
-    // Waiting screen: step into the stored printouts rather than doing nothing.
+    // Printer screen: Left/Right step into the stored printouts. Deliberately
+    // unlabelled — the hints stay off this screen, the buttons still work.
     showQueueEntry(queueIndex < 0 ? static_cast<int>(queue.size()) - 1 : queueIndex);
     return;
   }
@@ -501,8 +502,7 @@ void PrinterActivity::renderWaitingScreen() const {
     renderer.drawCenteredText(SMALL_FONT_ID, y, tr(STR_PRINTER_WAITING), true, EpdFontFamily::ITALIC);
   }
 
-  const bool hasQueue = !queue.empty();
-  const auto labels = mappedInput.mapLabels(tr(STR_EXIT), "", hasQueue ? "<" : "", hasQueue ? ">" : "");
+  const auto labels = mappedInput.mapLabels(tr(STR_EXIT), "", "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
