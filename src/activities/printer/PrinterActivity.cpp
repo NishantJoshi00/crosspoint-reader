@@ -1,7 +1,10 @@
 #include "PrinterActivity.h"
 
+#include <Bitmap.h>
 #include <ESPmDNS.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalStorage.h>
 #include <I18n.h>
 #include <Memory.h>
 #include <WiFi.h>
@@ -10,6 +13,7 @@
 #include "SilentRestart.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
+#include "components/icons/penguin.h"
 #include "fontIds.h"
 #include "util/QrUtils.h"
 #include "util/ScreenshotUtil.h"
@@ -26,7 +30,9 @@ constexpr uint16_t IPP_PORT = 631;
 constexpr unsigned long CLIENT_READ_TIMEOUT_MS = 2500;
 constexpr int QR_SIZE = 198;
 constexpr int MODE_ITEM_COUNT = 2;
-constexpr int REVEAL_STEPS = 4;  // paper-feed bands; ~2s total with fast refreshes
+constexpr const char* QUEUE_DIR = "/printouts";
+constexpr int QUEUE_RESERVE = 16;
+constexpr int PENGUIN_ART_SIZE = 96;
 
 uint32_t upTimeSeconds() { return millis() / 1000; }
 
@@ -90,25 +96,24 @@ class WiFiClientTransport final : public IppTransport {
 
 bool PrinterActivity::Sink::onScaledPageBegin(uint32_t pageIndex, int boxX, int boxY, int boxW, int boxH) {
   (void)boxX;
+  (void)boxY;
   (void)boxW;
+  (void)boxH;
   LOG_DBG("PRINT", "Receiving page %u, free heap: %d", static_cast<unsigned>(pageIndex), ESP.getFreeHeap());
   activity.state = PrinterState::PAGE_SHOWING;
   activity.renderer.clearScreen();
-  nextRevealY = boxY + boxH / REVEAL_STEPS;
   return true;
 }
 
 bool PrinterActivity::Sink::onScaledRow(int y, int xOffset, const uint8_t* rowBits, int width) {
+  // Rows accumulate silently in the framebuffer; the finished page is shown in
+  // a single refresh at page end. Intermediate refreshes cost ~0.5s each on
+  // e-ink, which made the whole print feel slow.
   GfxRenderer& renderer = activity.renderer;
   for (int x = 0; x < width; x++) {
     if (rowBits[x >> 3] & (0x80 >> (x & 7))) renderer.drawPixel(xOffset + x, y, true);
   }
-  // Paper-feed reveal: push what has arrived every band boundary.
-  if (y >= nextRevealY) {
-    nextRevealY = y + activity.renderer.getScreenHeight() / REVEAL_STEPS;
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-    resetTaskWatchdogIfSubscribed();
-  }
+  resetTaskWatchdogIfSubscribed();
   return true;
 }
 
@@ -119,8 +124,10 @@ void PrinterActivity::Sink::onScaledPageEnd(bool ok, uint32_t pageIndex) {
     activity.requestUpdate();
     return;
   }
-  activity.pagesReceived++;
-  activity.renderer.displayBuffer();  // final full-quality pass
+  // Persist before stamping hints so the stored page is clean, then show the
+  // hints over it — the page IS the framebuffer, there is no copy to repaint.
+  activity.savePageToQueue();
+  activity.drawPageHints();
   LOG_DBG("PRINT", "Page complete, free heap: %d", ESP.getFreeHeap());
 }
 
@@ -207,6 +214,7 @@ void PrinterActivity::startServices() {
     return;
   }
 
+  loadQueue();  // printouts from earlier sessions are part of the queue
   startMdns();
   server.begin(IPP_PORT);
   server.setNoDelay(true);
@@ -315,16 +323,37 @@ void PrinterActivity::loop() {
   if (state != PrinterState::RUNNING && state != PrinterState::PAGE_SHOWING) return;
 
   mappedInput.update();
+
+  if (optionPopup.isActive()) {
+    optionPopup.handleInput(mappedInput, [this] { requestUpdate(); });
+    // Dismissed without picking anything (the actions repaint themselves):
+    // restore the page that the popup was covering.
+    if (!optionPopup.isActive() && state == PrinterState::PAGE_SHOWING) showQueueEntry(queueIndex);
+    return;
+  }
+
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
     onGoHome(HomeMenuItem::PRINTER);
     return;
   }
   if (state == PrinterState::PAGE_SHOWING) {
-    if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) savePageToInbox();
-    if (mappedInput.wasPressed(MappedInputManager::Button::Left)) {
-      clearJob();
+    if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+      openOptions();
       return;
     }
+    if (mappedInput.wasPressed(MappedInputManager::Button::Left) && queueIndex > 0) {
+      showQueueEntry(queueIndex - 1);
+      return;
+    }
+    if (mappedInput.wasPressed(MappedInputManager::Button::Right) && queueIndex < static_cast<int>(queue.size()) - 1) {
+      showQueueEntry(queueIndex + 1);
+      return;
+    }
+  } else if (!queue.empty() && (mappedInput.wasPressed(MappedInputManager::Button::Left) ||
+                                mappedInput.wasPressed(MappedInputManager::Button::Right))) {
+    // Waiting screen: step into the stored printouts rather than doing nothing.
+    showQueueEntry(queueIndex < 0 ? static_cast<int>(queue.size()) - 1 : queueIndex);
+    return;
   }
   NetworkClient client = server.accept();
   if (client) {
@@ -342,18 +371,120 @@ void PrinterActivity::loop() {
   }
 }
 
-void PrinterActivity::savePageToInbox() {
-  char path[48];
-  snprintf(path, sizeof(path), "/printouts/print-%lu.bmp", millis());
-  // The shown page IS the framebuffer, so the screenshot writer does the work.
-  // Save before stamping the banner so the file holds the clean page.
-  if (ScreenshotUtil::saveFramebufferAsBmp(path, renderer.getFrameBuffer(), renderer.getDisplayWidth(),
-                                           renderer.getDisplayHeight())) {
-    LOG_DBG("PRINT", "Saved %s", path);
-    renderSavedBanner();
-  } else {
-    LOG_ERR("PRINT", "Save failed: %s", path);
+void PrinterActivity::loadQueue() {
+  queue.clear();
+  queue.reserve(QUEUE_RESERVE);
+
+  auto dir = Storage.open(QUEUE_DIR);
+  if (!dir || !dir.isDirectory()) return;
+
+  char name[128];
+  for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+    if (!file.isDirectory()) {
+      file.getName(name, sizeof(name));
+      const std::string fname(name);
+      if (fname.size() > 4 && fname[0] != '.' && fname.compare(fname.size() - 4, 4, ".bmp") == 0) {
+        queue.push_back(fname);
+      }
+    }
+    file.close();
   }
+  dir.close();
+
+  FsHelpers::sortFileList(queue);
+  queueIndex = queue.empty() ? -1 : static_cast<int>(queue.size()) - 1;
+  LOG_DBG("PRINT", "Queue: %d printout(s)", static_cast<int>(queue.size()));
+}
+
+void PrinterActivity::savePageToQueue() {
+  char path[64];
+  snprintf(path, sizeof(path), "%s/print-%lu.bmp", QUEUE_DIR, millis());
+  // The shown page IS the framebuffer, so the screenshot writer does the work.
+  if (!ScreenshotUtil::saveFramebufferAsBmp(path, renderer.getFrameBuffer(), renderer.getDisplayWidth(),
+                                            renderer.getDisplayHeight())) {
+    LOG_ERR("PRINT", "Save failed: %s", path);
+    return;
+  }
+  const char* slash = strrchr(path, '/');
+  queue.push_back(slash ? slash + 1 : path);
+  queueIndex = static_cast<int>(queue.size()) - 1;
+  LOG_DBG("PRINT", "Saved %s (queue: %d)", path, static_cast<int>(queue.size()));
+}
+
+void PrinterActivity::showQueueEntry(const int index) {
+  if (index < 0 || index >= static_cast<int>(queue.size())) return;
+  queueIndex = index;
+
+  const std::string path = std::string(QUEUE_DIR) + "/" + queue[index];
+  HalFile file;
+  if (!Storage.openFileForRead("PRINT", path, file)) {
+    LOG_ERR("PRINT", "Cannot open %s", path.c_str());
+    return;
+  }
+
+  Bitmap bitmap(file, true);
+  renderer.clearScreen();
+  if (bitmap.parseHeaders() == BmpReaderError::Ok) {
+    const int x = (renderer.getScreenWidth() - bitmap.getWidth()) / 2;
+    const int y = (renderer.getScreenHeight() - bitmap.getHeight()) / 2;
+    renderer.drawBitmap(bitmap, x < 0 ? 0 : x, y < 0 ? 0 : y, renderer.getScreenWidth(), renderer.getScreenHeight(), 0,
+                        0);
+  } else {
+    renderer.drawCenteredText(UI_10_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_INVALID_BMP_FILE));
+  }
+  file.close();
+
+  state = PrinterState::PAGE_SHOWING;
+  drawPageHints();
+}
+
+void PrinterActivity::drawPageHints() const {
+  const bool hasPrev = queueIndex > 0;
+  const bool hasNext = queueIndex >= 0 && queueIndex < static_cast<int>(queue.size()) - 1;
+  const auto labels =
+      mappedInput.mapLabels(tr(STR_EXIT), tr(STR_PRINTER_OPTIONS), hasPrev ? "<" : "", hasNext ? ">" : "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+}
+
+void PrinterActivity::deleteCurrentPage() {
+  if (queueIndex < 0 || queueIndex >= static_cast<int>(queue.size())) return;
+  const std::string path = std::string(QUEUE_DIR) + "/" + queue[queueIndex];
+  if (!Storage.remove(path.c_str())) LOG_ERR("PRINT", "Delete failed: %s", path.c_str());
+  queue.erase(queue.begin() + queueIndex);
+
+  if (queue.empty()) {
+    queueIndex = -1;
+    state = PrinterState::RUNNING;
+    requestUpdate();
+    return;
+  }
+  if (queueIndex >= static_cast<int>(queue.size())) queueIndex = static_cast<int>(queue.size()) - 1;
+  showQueueEntry(queueIndex);
+}
+
+void PrinterActivity::clearQueue() {
+  for (const auto& name : queue) {
+    const std::string path = std::string(QUEUE_DIR) + "/" + name;
+    if (!Storage.remove(path.c_str())) LOG_ERR("PRINT", "Delete failed: %s", path.c_str());
+  }
+  LOG_DBG("PRINT", "Queue cleared (%d removed)", static_cast<int>(queue.size()));
+  queue.clear();
+  queueIndex = -1;
+  state = PrinterState::RUNNING;
+  requestUpdate();
+}
+
+void PrinterActivity::openOptions() {
+  static constexpr StrId options[] = {StrId::STR_DELETE, StrId::STR_PRINTER_CLEAR_QUEUE};
+  optionPopup.show(StrId::STR_PRINTER_OPTIONS, options, 2, 0, [this](int selected) {
+    if (selected == 0) {
+      deleteCurrentPage();
+    } else if (selected == 1) {
+      clearQueue();
+    }
+  });
+  requestUpdate();
 }
 
 void PrinterActivity::renderModeSelect() const {
@@ -404,20 +535,21 @@ void PrinterActivity::renderWaitingScreen() const {
                     EpdFontFamily::BOLD);
   y += height10 + metrics.verticalSpacing;
   renderer.drawText(SMALL_FONT_ID, metrics.contentSidePadding, y, printerUri);
+  y += renderer.getLineHeight(SMALL_FONT_ID) + metrics.verticalSpacing * 3;
 
-  const auto labels = mappedInput.mapLabels(tr(STR_EXIT), "", "", "");
+  // The penguin waiting with a page: this screen is where you sit while
+  // nothing is happening, so give it something to look at.
+  const int artX = (pageWidth - PENGUIN_ART_SIZE) / 2;
+  const int bottomLimit = renderer.getScreenHeight() - metrics.buttonHintsHeight - height10 * 2;
+  if (y + PENGUIN_ART_SIZE <= bottomLimit) {
+    renderer.drawIcon(PenguinArt, artX, y, PENGUIN_ART_SIZE);
+    y += PENGUIN_ART_SIZE + metrics.verticalSpacing;
+    renderer.drawCenteredText(SMALL_FONT_ID, y, tr(STR_PRINTER_WAITING), true, EpdFontFamily::ITALIC);
+  }
+
+  const bool hasQueue = !queue.empty();
+  const auto labels = mappedInput.mapLabels(tr(STR_EXIT), "", hasQueue ? "<" : "", hasQueue ? ">" : "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-}
-
-void PrinterActivity::renderSavedBanner() const {
-  // The page itself already occupies the framebuffer; stamp the banner over it
-  // rather than repainting (there is no page copy to repaint from).
-  const int w = renderer.getScreenWidth();
-  const int h = renderer.getScreenHeight();
-  const int height10 = renderer.getLineHeight(UI_10_FONT_ID);
-  renderer.fillRect(0, h - height10 - 8, w, height10 + 8, false);
-  renderer.drawCenteredText(UI_10_FONT_ID, h - height10 - 4, tr(STR_PRINTER_PAGE_SAVED), true, EpdFontFamily::BOLD);
-  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 }
 
 void PrinterActivity::render(RenderLock&&) {
@@ -438,7 +570,11 @@ void PrinterActivity::render(RenderLock&&) {
       break;
     case PrinterState::PAGE_SHOWING:
       // The page is drawn straight into the framebuffer as rows decode, so
-      // there is nothing to repaint here — leave what is on the panel.
+      // there is nothing to repaint here — only the popup floats above it.
+      if (optionPopup.isActive()) {
+        optionPopup.render(renderer);
+        renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+      }
       break;
     case PrinterState::WIFI_SELECTING:
     case PrinterState::FAILED:

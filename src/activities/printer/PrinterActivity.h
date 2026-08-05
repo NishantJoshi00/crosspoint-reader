@@ -3,8 +3,10 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "activities/Activity.h"
+#include "components/OptionPopup.h"
 #include "network/ipp/HttpIppConnection.h"
 #include "network/ipp/IppPrintService.h"
 #include "network/ipp/PageScaler.h"
@@ -38,7 +40,6 @@ class PrinterActivity final : public Activity {
   // staging buffer (48 KB the device does not have with WiFi up).
   class Sink final : public ScaledPageSink {
     PrinterActivity& activity;
-    int nextRevealY = 0;
 
    public:
     explicit Sink(PrinterActivity& a) : activity(a) {}
@@ -63,16 +64,26 @@ class PrinterActivity final : public Activity {
   WiFiServer server{631};
   bool serverStarted = false;
 
-  int pagesReceived = 0;
+  // The printout queue lives on the SD card (/printouts): pages are far too
+  // big to keep in RAM, so this holds filenames only and each page is loaded
+  // on demand when the user traverses to it.
+  std::vector<std::string> queue;
+  int queueIndex = -1;
+  OptionPopup optionPopup;
 
   void beginModeSelect();
   void onModeChosen(bool hotspot);
   bool startAccessPoint();
   void startServices();
   void startMdns();
-  void clearJob();  // Left: back to the waiting screen, drop shown page
-  void savePageToInbox();
+  void clearJob();  // abort an in-flight job (Left held during transfer)
+  void loadQueue();
+  void savePageToQueue();
+  void showQueueEntry(int index);
+  void deleteCurrentPage();
+  void clearQueue();
+  void openOptions();
+  void drawPageHints() const;
   void renderModeSelect() const;
   void renderWaitingScreen() const;
-  void renderSavedBanner() const;
 };
