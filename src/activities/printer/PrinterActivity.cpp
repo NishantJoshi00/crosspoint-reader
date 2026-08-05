@@ -335,19 +335,25 @@ void PrinterActivity::loop() {
     }
     return;
   }
+  // Front Left/Right and the side Up/Down buttons both navigate, matching
+  // BmpViewerActivity: Left|Up = previous, Right|Down = next.
+  const bool prevPressed = mappedInput.wasPressed(MappedInputManager::Button::Left) ||
+                           mappedInput.wasPressed(MappedInputManager::Button::Up);
+  const bool nextPressed = mappedInput.wasPressed(MappedInputManager::Button::Right) ||
+                           mappedInput.wasPressed(MappedInputManager::Button::Down);
+
   if (state == PrinterState::PAGE_SHOWING) {
-    if (mappedInput.wasPressed(MappedInputManager::Button::Left) && queueIndex > 0) {
+    if (prevPressed && queueIndex > 0) {
       showQueueEntry(queueIndex - 1);
       return;
     }
-    if (mappedInput.wasPressed(MappedInputManager::Button::Right) && queueIndex < static_cast<int>(queue.size()) - 1) {
+    if (nextPressed && queueIndex < static_cast<int>(queue.size()) - 1) {
       showQueueEntry(queueIndex + 1);
       return;
     }
-  } else if (!queue.empty() && (mappedInput.wasPressed(MappedInputManager::Button::Left) ||
-                                mappedInput.wasPressed(MappedInputManager::Button::Right))) {
-    // Printer screen: Left/Right step into the stored printouts. Deliberately
-    // unlabelled — the hints stay off this screen, the buttons still work.
+  } else if (!queue.empty() && (prevPressed || nextPressed)) {
+    // Printer screen: step into the stored printouts. Deliberately unlabelled —
+    // the hints stay off this screen, the buttons still work.
     showQueueEntry(queueIndex < 0 ? static_cast<int>(queue.size()) - 1 : queueIndex);
     return;
   }
@@ -439,6 +445,8 @@ void PrinterActivity::drawPageHints() const {
   const bool hasNext = queueIndex >= 0 && queueIndex < static_cast<int>(queue.size()) - 1;
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", hasPrev ? "<" : "", hasNext ? ">" : "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  // The side buttons navigate too — label them so that is discoverable.
+  GUI.drawSideButtonHints(renderer, hasPrev ? "<" : "", hasNext ? ">" : "");
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 }
 
