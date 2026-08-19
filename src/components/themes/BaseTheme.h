@@ -126,7 +126,8 @@ enum UIIcon {
   Hotspot,
   Bookmark,
   Qr,
-  Dice
+  Dice,
+  Printer
 };
 
 // Default theme implementation (Classic Theme)

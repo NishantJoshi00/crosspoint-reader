@@ -24,6 +24,7 @@
 #include "components/icons/hotspot.h"
 #include "components/icons/image24.h"
 #include "components/icons/library.h"
+#include "components/icons/printer.h"
 #include "components/icons/qr.h"
 #include "components/icons/recent.h"
 #include "components/icons/settings2.h"
@@ -83,6 +84,8 @@ const uint8_t* iconForName(UIIcon icon, int size) {
         return QrIcon;
       case UIIcon::Dice:
         return DiceIcon;
+      case UIIcon::Printer:
+        return PrinterIcon;
       default:
         return nullptr;
     }

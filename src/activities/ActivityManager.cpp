@@ -14,6 +14,7 @@
 #include "home/HomeActivity.h"
 #include "home/RecentBooksActivity.h"
 #include "network/CrossPointWebServerActivity.h"
+#include "printer/PrinterActivity.h"
 #include "qr/QrMenuActivity.h"
 #include "reader/ReaderActivity.h"
 #include "rng/RngActivity.h"
@@ -193,6 +194,8 @@ void ActivityManager::goToFileTransfer() {
 void ActivityManager::goToQrCodes() { replaceActivity(std::make_unique<QrMenuActivity>(renderer, mappedInput)); }
 
 void ActivityManager::goToRng() { replaceActivity(std::make_unique<RngActivity>(renderer, mappedInput)); }
+
+void ActivityManager::goToPrinter() { replaceActivity(std::make_unique<PrinterActivity>(renderer, mappedInput)); }
 
 void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
 
