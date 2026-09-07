@@ -58,15 +58,16 @@ failure, the five-second timeout, timer reset, discovery polling, and timer wrap
 The protocol test sends real IPP discovery requests through the firmware's HTTP
 and IPP code, verifying that a completed response releases the timed session.
 It also verifies that a fragmented print request produces all expected pixels
-before the connection closes.
+before the connection closes, and that long attribute names do not misalign the
+next IPP attribute.
 The CI unit-test job runs this suite.
 
 Build the X3/X4 firmware with `pio run -e default`.
 
-Verified on 2026-09-07: the X3/X4 build, clock/timer/protocol regressions, formatting,
-and whitespace checks pass. Static analysis still exits with 21 existing IPP
-findings, 20 buffer-initialization warnings and one parser condition warning.
-Comparing diagnostics before and after the protocol change found no additions.
+Verified on 2026-09-07: the X3/X4 build, clock/timer/protocol regressions, full
+repository formatting, whitespace, and strict static-analysis checks pass.
+Printer buffers are explicitly initialized, and the parser consumes excess
+attribute-name bytes through the same zero-length-safe path as shorter names.
 The firmware has not been flashed. Battery current and the original idle-print
 failure have not been verified on hardware.
 

@@ -127,9 +127,8 @@ void QrCreateActivity::beginType(QrType selected) {
       promptName();
     }
   };
-  startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput,
-                                                                 I18n::getInstance().get(title), prefill, maxLength,
-                                                                 inputType),
+  startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, I18n::getInstance().get(title),
+                                                                 prefill, maxLength, inputType),
                          handler);
 }
 

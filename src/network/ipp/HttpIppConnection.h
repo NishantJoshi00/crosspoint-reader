@@ -25,8 +25,8 @@ class HttpIppConnection {
  private:
   IppPrintService& service;
   uint32_t maxJobBytes;
-  uint8_t respBuf[RESPONSE_CAP];
-  char line[512];
+  uint8_t respBuf[RESPONSE_CAP] = {};
+  char line[512] = {};
 
   bool handleOne(IppTransport& io, IppByteReader& in, uint32_t (*upTime)(), bool& keepAlive, bool allowKeepAlive);
   bool sendSimple(IppTransport& io, const char* status, const char* body);

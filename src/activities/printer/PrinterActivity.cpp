@@ -112,7 +112,7 @@ bool PrinterActivity::Sink::onScaledRow(int y, int xOffset, const uint8_t* rowBi
   // Rows accumulate silently in the framebuffer; the finished page is shown in
   // a single refresh at page end. Intermediate refreshes cost ~0.5s each on
   // e-ink, which made the whole print feel slow.
-  GfxRenderer& renderer = activity.renderer;
+  const GfxRenderer& renderer = activity.renderer;
   for (int x = 0; x < width; x++) {
     if (rowBits[x >> 3] & (0x80 >> (x & 7))) renderer.drawPixel(xOffset + x, y, true);
   }

@@ -4,6 +4,7 @@
 #include <string>
 
 #include "HttpIppConnection.h"
+#include "IppParser.h"
 
 class MemoryTransport final : public IppTransport {
   std::string input;
@@ -85,6 +86,36 @@ int main() {
   connection.serve(health, uptime);
   assert(health.output.find("HTTP/1.1", 1) == std::string::npos);
 
+  // Names at and beyond the parser's buffer boundary must not misalign the
+  // following attribute, including when the skipped bytes span input reads.
+  for (const uint16_t nameLength : {47, 48, 300}) {
+    std::string body(attributes, 8);
+    auto appendLength = [&body](uint16_t length) {
+      body += static_cast<char>(length >> 8);
+      body += static_cast<char>(length & 0xff);
+    };
+    body += '\1';    // Operation attributes.
+    body += '\x42';  // Name without language.
+    appendLength(nameLength);
+    body.append(nameLength, 'x');
+    appendLength(1);
+    body += 'v';
+    body += '\x42';
+    appendLength(8);
+    body += "job-name";
+    appendLength(5);
+    body += "after";
+    body += '\3';
+
+    MemoryTransport transport(body);
+    transport.readLimit = 5;
+    IppByteReader reader(transport);
+    IppBodyReader input(reader, false, body.size(), body.size());
+    IppRequest parsed;
+    assert(IppParser::parse(input, parsed));
+    assert(std::strcmp(parsed.jobName, "after") == 0);
+  }
+
   // A fragmented print body must finish before the connection is closed.
   std::string raster("UNIRAST", 8);
   raster.append("\0\0\0\1", 4);
@@ -110,4 +141,5 @@ int main() {
   assert(print.output.find("Connection: close\r\n") != std::string::npos);
   std::puts("PASS: discovery yields control to the timer; persistent clients and health responses remain valid");
   std::puts("PASS: fragmented print data produces the complete page before closing");
+  std::puts("PASS: long attribute names preserve the following IPP attribute");
 }
