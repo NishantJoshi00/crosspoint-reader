@@ -10,6 +10,7 @@
 #include <WiFi.h>
 #include <mdns.h>  // subtype API; ESPmDNS does not expose it
 
+#include "CrossPointSettings.h"
 #include "SilentRestart.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
@@ -45,9 +46,18 @@ class WiFiClientTransport final : public IppTransport {
   MappedInputManager& input;
   int readsSinceYield = 0;
 
+  bool pollInput() {
+    input.update();
+    userActivity = userActivity || input.wasAnyPressed();
+    backPressed = backPressed || input.wasPressed(MappedInputManager::Button::Back);
+    clearPressed = clearPressed || input.wasPressed(MappedInputManager::Button::Left);
+    return !backPressed && !clearPressed;
+  }
+
  public:
   bool backPressed = false;
   bool clearPressed = false;
+  bool userActivity = false;
 
   WiFiClientTransport(NetworkClient& client, MappedInputManager& input) : client(client), input(input) {}
 
@@ -61,21 +71,14 @@ class WiFiClientTransport final : public IppTransport {
         resetTaskWatchdogIfSubscribed();
         if (++readsSinceYield >= YIELD_EVERY_READS) {
           readsSinceYield = 0;
-          yield();
+          delay(1);
+          if (!pollInput()) return -1;
         }
         return client.read(buf, maxLen);
       }
       if (millis() - start > CLIENT_READ_TIMEOUT_MS) return -1;
       resetTaskWatchdogIfSubscribed();
-      input.update();
-      if (input.wasPressed(MappedInputManager::Button::Back)) {
-        backPressed = true;
-        return -1;
-      }
-      if (input.wasPressed(MappedInputManager::Button::Left)) {
-        clearPressed = true;
-        return -1;
-      }
+      if (!pollInput()) return -1;
       delay(2);
     }
     return 0;
@@ -127,6 +130,7 @@ void PrinterActivity::Sink::onScaledPageEnd(bool ok, uint32_t pageIndex) {
   // Persist before stamping hints so the stored page is clean, then show the
   // hints over it — the page IS the framebuffer, there is no copy to repaint.
   activity.savePageToQueue();
+  activity.renewTimeout();
   activity.drawPageHints();
   LOG_DBG("PRINT", "Page complete, free heap: %d", ESP.getFreeHeap());
 }
@@ -151,8 +155,7 @@ void PrinterActivity::onModeChosen(const bool hotspot) {
 
   if (hotspot) {
     if (!startAccessPoint()) {
-      state = PrinterState::FAILED;
-      onGoHome(HomeMenuItem::PRINTER);
+      failStart();
       return;
     }
     startServices();
@@ -193,9 +196,24 @@ bool PrinterActivity::startAccessPoint() {
   return true;
 }
 
-void PrinterActivity::startServices() {
+void PrinterActivity::updateAddress() {
+  const IPAddress ip = isApMode ? WiFi.softAPIP() : WiFi.localIP();
+  netIp = ip.toString().c_str();
   snprintf(printerUri, sizeof(printerUri), "ipp://%s:%u/ipp/print", netIp.c_str(), IPP_PORT);
   snprintf(moreInfoUrl, sizeof(moreInfoUrl), "http://%s/", netIp.c_str());
+}
+
+void PrinterActivity::startServices() {
+  // Match the web server's reachability policy, scoped to this timed session.
+  previousWifiSleep = WiFi.getSleep();
+  wifiSleepChanged = WiFi.setSleep(false);
+  if (!wifiSleepChanged) {
+    LOG_ERR("PRINT", "Could not disable WiFi modem sleep");
+    failStart();
+    return;
+  }
+  if (!isApMode) WiFi.setAutoReconnect(true);
+  updateAddress();
 
   IppServiceConfig cfg;
   cfg.printerName = PRINTER_NAME;
@@ -209,8 +227,7 @@ void PrinterActivity::startServices() {
   if (service) connection = makeUniqueNoThrow<HttpIppConnection>(*service, cfg.maxJobBytes);
   if (!connection) {
     LOG_ERR("PRINT", "OOM: IPP service");
-    state = PrinterState::FAILED;
-    onGoHome(HomeMenuItem::PRINTER);
+    failStart();
     return;
   }
 
@@ -218,15 +235,39 @@ void PrinterActivity::startServices() {
   startMdns();
   server.begin(IPP_PORT);
   server.setNoDelay(true);
-  serverStarted = true;
+  serverStarted = static_cast<bool>(server);
+  if (!serverStarted) {
+    LOG_ERR("PRINT", "Could not start IPP listener");
+    failStart();
+    return;
+  }
 
   state = PrinterState::RUNNING;
+  networkReady = true;
+  idleTimer.start(millis(), SETTINGS.getSleepTimeoutMs());
+  shownMinutes = idleTimer.remainingMinutes(millis());
   LOG_DBG("PRINT", "IPP server on %s, free heap: %d", printerUri, ESP.getFreeHeap());
+  requestUpdate();
+}
+
+void PrinterActivity::failStart() {
+  server.end();
+  serverStarted = false;
+  MDNS.end();
+  connection.reset();
+  service.reset();
+  sink.reset();
+  if (wifiSleepChanged) WiFi.setSleep(previousWifiSleep);
+  wifiSleepChanged = false;
+  WiFi.mode(WIFI_OFF);
+  networkReady = false;
+  state = PrinterState::FAILED;
   requestUpdate();
 }
 
 void PrinterActivity::startMdns() {
   MDNS.end();
+  discoveryReady = false;
   if (!MDNS.begin(HOSTNAME)) {
     // Direct ipp://<ip> printing still works without discovery.
     LOG_ERR("PRINT", "mDNS failed to start");
@@ -254,6 +295,7 @@ void PrinterActivity::startMdns() {
   if (subErr != ESP_OK) {
     LOG_ERR("PRINT", "mDNS: _universal subtype failed (%d) — client may ask for a driver", subErr);
   }
+  discoveryReady = subErr == ESP_OK;
   LOG_DBG("PRINT", "mDNS: _ipp._tcp,_universal advertised as '%s'", PRINTER_NAME);
 }
 
@@ -264,6 +306,7 @@ void PrinterActivity::onExit() {
   connection.reset();
   service.reset();
   sink.reset();
+  if (wifiSleepChanged) WiFi.setSleep(previousWifiSleep);
 
   // Same convention as CrossPointWebServerActivity: restart silently after
   // WiFi use so the radio and heap come back to a known state.
@@ -281,6 +324,45 @@ void PrinterActivity::onExit() {
 void PrinterActivity::clearJob() {
   LOG_DBG("PRINT", "Clear: dropping shown page, back to waiting");
   state = PrinterState::RUNNING;
+  requestUpdate();
+}
+
+void PrinterActivity::renewTimeout() { idleTimer.renew(millis()); }
+
+void PrinterActivity::updateNetwork() {
+  const unsigned long now = millis();
+  if (now - lastNetworkCheck < 1000) return;
+  lastNetworkCheck = now;
+  const bool connected = isApMode ? (WiFi.getMode() & WIFI_AP) != 0 : WiFi.status() == WL_CONNECTED;
+  if (!connected) {
+    if (networkReady) {
+      LOG_INF("PRINT", "Network lost; waiting for reconnect");
+      server.end();
+      serverStarted = false;
+      MDNS.end();
+      networkReady = false;
+      // Printouts are saved, so a lost network can replace the shown page with
+      // an honest status. The user can still browse the saved queue.
+      state = PrinterState::RUNNING;
+      requestUpdate();
+    }
+    return;
+  }
+  const IPAddress ip = isApMode ? WiFi.softAPIP() : WiFi.localIP();
+  if (networkReady && netIp == ip.toString().c_str()) return;
+  updateAddress();
+  server.end();
+  server.begin(IPP_PORT);
+  server.setNoDelay(true);
+  serverStarted = static_cast<bool>(server);
+  networkReady = serverStarted;
+  if (networkReady) {
+    startMdns();
+    LOG_INF("PRINT", "Network restored: %s", printerUri);
+  } else {
+    LOG_ERR("PRINT", "Could not restart IPP listener");
+    failStart();
+  }
   requestUpdate();
 }
 
@@ -320,9 +402,25 @@ void PrinterActivity::loop() {
     return;
   }
 
-  if (state != PrinterState::RUNNING && state != PrinterState::PAGE_SHOWING) return;
+  if (state == PrinterState::FAILED) {
+    if (mappedInput.wasPressed(MappedInputManager::Button::Back)) onGoHome(HomeMenuItem::PRINTER);
+    return;
+  }
+  if (!isSessionActive()) return;
+  // Timer renders, queue browsing, and incoming rows share one framebuffer.
+  RenderLock lock(*this);
 
-  mappedInput.update();
+  // main.cpp already sampled input. Sampling again here erases press events.
+  if (mappedInput.wasAnyPressed()) renewTimeout();
+  if (idleTimer.expired(millis())) return;
+  updateNetwork();
+  if (!isSessionActive()) return;
+
+  const uint32_t minutes = idleTimer.remainingMinutes(millis());
+  if (minutes != shownMinutes) {
+    shownMinutes = minutes;
+    requestUpdate();
+  }
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
     // Back steps out one level: from a printout back to the printer screen,
@@ -333,6 +431,11 @@ void PrinterActivity::loop() {
     } else {
       onGoHome(HomeMenuItem::PRINTER);
     }
+    return;
+  }
+  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+    // Redraw even within the same minute to acknowledge the reset.
+    requestUpdate();
     return;
   }
   // Front Left/Right and the side Up/Down buttons both navigate, matching
@@ -357,12 +460,19 @@ void PrinterActivity::loop() {
     showQueueEntry(queueIndex < 0 ? static_cast<int>(queue.size()) - 1 : queueIndex);
     return;
   }
+  if (!networkReady) return;
   NetworkClient client = server.accept();
   if (client) {
     LOG_DBG("PRINT", "client connected");
     client.setNoDelay(true);
     WiFiClientTransport transport(client, mappedInput);
-    connection->serve(transport, upTimeSeconds);
+    // An open print dialog must not monopolize the loop with keep-alive probes.
+    // Finish the request, advertise Connection: close, then service the timer.
+    connection->serve(transport, upTimeSeconds, false);
+    if (transport.userActivity) {
+      renewTimeout();
+      requestUpdate();
+    }
     client.stop();
     LOG_DBG("PRINT", "client done, free heap: %d", ESP.getFreeHeap());
     if (transport.backPressed) {
@@ -443,11 +553,39 @@ void PrinterActivity::showQueueEntry(const int index) {
 void PrinterActivity::drawPageHints() const {
   const bool hasPrev = queueIndex > 0;
   const bool hasNext = queueIndex >= 0 && queueIndex < static_cast<int>(queue.size()) - 1;
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", hasPrev ? "<" : "", hasNext ? ">" : "");
+  drawTimeout();
+  const auto labels =
+      mappedInput.mapLabels(tr(STR_BACK), tr(STR_PRINTER_RESET_TIMER), hasPrev ? "<" : "", hasNext ? ">" : "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   // The side buttons navigate too — label them so that is discoverable.
   GUI.drawSideButtonHints(renderer, hasPrev ? "<" : "", hasNext ? ">" : "");
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+}
+
+void PrinterActivity::drawTimeout() const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int width = renderer.getScreenWidth();
+  const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
+  const int y = renderer.getScreenHeight() - metrics.buttonHintsHeight - lineHeight - 12;
+  renderer.fillRect(0, y - 4, width, lineHeight + 12, false);
+  char text[96];
+  snprintf(text, sizeof(text), tr(STR_PRINTER_TIMEOUT_FORMAT),
+           static_cast<unsigned>(idleTimer.remainingMinutes(millis())));
+  renderer.drawCenteredText(SMALL_FONT_ID, y, text);
+}
+
+bool PrinterActivity::prepareSleepScreen(bool fromTimeout) {
+  if (!fromTimeout || !isSessionActive()) return false;
+  const int width = renderer.getScreenWidth();
+  const int height = renderer.getScreenHeight();
+  renderer.clearScreen();
+  renderer.drawCenteredText(UI_12_FONT_ID, height / 3, tr(STR_PRINTER_ASLEEP), true, EpdFontFamily::BOLD);
+  UITheme::drawCenteredWrappedText(renderer, Rect{24, height / 3 + 50, width - 48, 100}, UI_10_FONT_ID,
+                                   tr(STR_PRINTER_TIMEOUT_REASON), 3);
+  UITheme::drawCenteredWrappedText(renderer, Rect{24, height / 2 + 60, width - 48, height / 4}, UI_10_FONT_ID,
+                                   tr(STR_PRINTER_WAKE_HINT), 4);
+  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  return true;
 }
 
 void PrinterActivity::renderModeSelect() const {
@@ -483,6 +621,15 @@ void PrinterActivity::renderWaitingScreen() const {
   const int height10 = renderer.getLineHeight(UI_10_FONT_ID);
   int y = metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing * 2;
 
+  if (!networkReady) {
+    UITheme::drawCenteredWrappedText(renderer, Rect{24, y, pageWidth - 48, 100}, UI_10_FONT_ID,
+                                     tr(STR_PRINTER_DISCONNECTED), 3);
+    drawTimeout();
+    const auto labels = mappedInput.mapLabels(tr(STR_EXIT), tr(STR_PRINTER_RESET_TIMER), "", "");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    return;
+  }
+
   if (isApMode) {
     renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, y, tr(STR_CONNECT_WIFI_HINT), true,
                       EpdFontFamily::BOLD);
@@ -499,6 +646,11 @@ void PrinterActivity::renderWaitingScreen() const {
   y += height10 + metrics.verticalSpacing;
   renderer.drawText(SMALL_FONT_ID, metrics.contentSidePadding, y, printerUri);
   y += renderer.getLineHeight(SMALL_FONT_ID) + metrics.verticalSpacing * 3;
+  if (!discoveryReady) {
+    UITheme::drawCenteredWrappedText(renderer, Rect{24, y, pageWidth - 48, 60}, SMALL_FONT_ID,
+                                     tr(STR_PRINTER_DISCOVERY_UNAVAILABLE), 2);
+    y += 60;
+  }
 
   // The penguin waiting with a page: this screen is where you sit while
   // nothing is happening, so give it something to look at.
@@ -510,7 +662,8 @@ void PrinterActivity::renderWaitingScreen() const {
     renderer.drawCenteredText(SMALL_FONT_ID, y, tr(STR_PRINTER_WAITING), true, EpdFontFamily::ITALIC);
   }
 
-  const auto labels = mappedInput.mapLabels(tr(STR_EXIT), "", "", "");
+  drawTimeout();
+  const auto labels = mappedInput.mapLabels(tr(STR_EXIT), tr(STR_PRINTER_RESET_TIMER), "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
@@ -528,14 +681,23 @@ void PrinterActivity::render(RenderLock&&) {
       break;
     case PrinterState::RUNNING:
       renderWaitingScreen();
-      renderer.displayBuffer();
+      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
       break;
     case PrinterState::PAGE_SHOWING:
-      // The page is drawn straight into the framebuffer as rows decode, so
-      // there is nothing to repaint here — leave what is on the panel.
+      // Preserve the printout and refresh only its countdown footer.
+      drawTimeout();
+      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
       break;
     case PrinterState::WIFI_SELECTING:
+      break;
     case PrinterState::FAILED:
+      UITheme::drawCenteredWrappedText(renderer, Rect{24, 120, renderer.getScreenWidth() - 48, 180}, UI_10_FONT_ID,
+                                       tr(STR_PRINTER_START_FAILED), 4);
+      {
+        const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+        GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+      }
+      renderer.displayBuffer();
       break;
   }
 }

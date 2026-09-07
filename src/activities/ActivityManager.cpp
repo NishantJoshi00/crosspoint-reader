@@ -51,7 +51,7 @@ void ActivityManager::renderTaskLoop() {
     // Acquire the lock before reading currentActivity to avoid a TOCTOU race
     // where the main task deletes the activity between the null-check and render().
     RenderLock lock;
-    if (currentActivity) {
+    if (currentActivity && !sleepTransitionInProgress) {
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
       currentActivity->render(std::move(lock));
     }
@@ -68,7 +68,9 @@ void ActivityManager::renderTaskLoop() {
 }
 
 void ActivityManager::loop() {
-  if (currentActivity) {
+  // A queued transition must not run the outgoing activity again. In particular,
+  // it must not accept another print after preparing the timeout sleep screen.
+  if (currentActivity && pendingAction == PendingAction::None) {
     if (!currentActivity->isHomeActivity() && mappedInput.wasHomeGesture()) {
       if (currentActivity->handleHomeGesture()) {
         return;
@@ -222,7 +224,15 @@ void ActivityManager::goToReader(std::string path, const bool allowFastInitialRe
 }
 
 void ActivityManager::goToSleep(bool fromTimeout) {
-  replaceActivity(std::make_unique<SleepActivity>(renderer, mappedInput, fromTimeout));
+  bool keepPreparedScreen = false;
+  {
+    RenderLock lock;
+    // Pending render notifications must not overwrite a prepared sleep screen
+    // between releasing this lock and replacing the outgoing activity.
+    sleepTransitionInProgress = true;
+    if (currentActivity) keepPreparedScreen = currentActivity->prepareSleepScreen(fromTimeout);
+  }
+  replaceActivity(std::make_unique<SleepActivity>(renderer, mappedInput, fromTimeout, keepPreparedScreen));
   loop();  // Important: sleep screen must be rendered immediately, the caller will go to sleep right after this returns
 }
 
@@ -271,6 +281,8 @@ void ActivityManager::popActivity() {
 }
 
 bool ActivityManager::preventAutoSleep() const { return currentActivity && currentActivity->preventAutoSleep(); }
+
+bool ActivityManager::wantsAutoSleep() const { return currentActivity && currentActivity->wantsAutoSleep(); }
 
 const char* ActivityManager::qrSleepName() const { return currentActivity ? currentActivity->qrSleepName() : nullptr; }
 

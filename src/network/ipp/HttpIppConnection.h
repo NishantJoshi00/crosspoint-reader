@@ -18,7 +18,9 @@ class HttpIppConnection {
 
   // Serves requests on this transport until the peer closes, errors, or sends
   // Connection: close. upTimeSeconds is sampled per-request via the callback.
-  void serve(IppTransport& io, uint32_t (*upTime)());
+  // Set allowKeepAlive=false for a timed foreground service so each completed
+  // request returns control to input, countdown rendering, and sleep checks.
+  void serve(IppTransport& io, uint32_t (*upTime)(), bool allowKeepAlive = true);
 
  private:
   IppPrintService& service;
@@ -26,7 +28,7 @@ class HttpIppConnection {
   uint8_t respBuf[RESPONSE_CAP];
   char line[512];
 
-  bool handleOne(IppTransport& io, IppByteReader& in, uint32_t (*upTime)(), bool& keepAlive);
+  bool handleOne(IppTransport& io, IppByteReader& in, uint32_t (*upTime)(), bool& keepAlive, bool allowKeepAlive);
   bool sendSimple(IppTransport& io, const char* status, const char* body);
   bool sendIppResponse(IppTransport& io, size_t ippLen, bool keepAlive);
 };

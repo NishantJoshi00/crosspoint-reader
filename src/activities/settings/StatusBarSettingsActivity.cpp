@@ -273,7 +273,7 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
           case ITEM_CLOCK_UTC_OFFSET:
             return formatUtcOffset(SETTINGS.clockUtcOffsetQ);
           case ITEM_CLOCK_SYNC:
-            return SETTINGS.clockHasBeenSynced ? tr(STR_CLOCK_SYNCED) : tr(STR_NOT_SET);
+            return halClock.hasValidTime() ? tr(STR_CLOCK_SYNCED) : tr(STR_NOT_SET);
           default:
             return tr(STR_HIDE);
         }

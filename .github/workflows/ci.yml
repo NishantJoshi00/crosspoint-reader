@@ -147,6 +147,9 @@ jobs:
       - name: Run tests
         run: ctest --test-dir build/test --output-on-failure -j
 
+      - name: Test offline clock and printer timeout
+        run: sh test/power_clock/run.sh
+
   # This job is used as the PR required actions check, allows for changes to other steps in the future without breaking
   # PR requirements.
   test-status:

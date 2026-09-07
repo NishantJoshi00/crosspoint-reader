@@ -44,6 +44,7 @@ enum class HomeMenuItem {
  * - onActivityResult is implemented via a callback instead of a separate method, for simplicity
  */
 class ActivityManager {
+  bool sleepTransitionInProgress = false;
   friend class RenderLock;
 
  protected:
@@ -114,6 +115,7 @@ class ActivityManager {
   void popActivity();
 
   bool preventAutoSleep() const;
+  bool wantsAutoSleep() const;
   bool isReaderActivity() const;
   // Non-null when the current activity is displaying a saved QR code.
   const char* qrSleepName() const;

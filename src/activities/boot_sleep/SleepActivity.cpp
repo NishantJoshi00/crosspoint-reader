@@ -24,6 +24,7 @@
 
 void SleepActivity::onEnter() {
   Activity::onEnter();
+  if (keepPreparedScreen) return;
 
   const bool renderQuickResume =
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
@@ -187,21 +188,25 @@ void SleepActivity::renderDefaultSleepScreen() const {
 // Life-in-weeks grid: 52 columns (weeks) x 80 rows (years of life). Completed
 // age-years are full rows; the current age-year's row fills with the weeks
 // since the last birthday. Below the grid, the total number of days lived
-// (bare number by design). Falls back to the default sleep screen when the
-// birthdate is unset or the RTC date is unreliable.
+// (bare number by design). Missing prerequisites get an explicit sleep screen.
 void SleepActivity::renderMementoMoriSleepScreen() const {
   int birthYear, birthMonth, birthDay;
   uint16_t year;
   uint8_t month, day;
-  if (!SETTINGS.getBirthdate(birthYear, birthMonth, birthDay) ||
-      !halClock.getDate(year, month, day, SETTINGS.clockUtcOffsetQ)) {
-    return renderDefaultSleepScreen();
+  if (!SETTINGS.getBirthdate(birthYear, birthMonth, birthDay)) {
+    return renderMementoMoriUnavailable(tr(STR_MEMENTO_NEEDS_BIRTHDATE), tr(STR_MEMENTO_BIRTHDATE_HINT));
+  }
+  if (!halClock.isAvailable()) {
+    return renderMementoMoriUnavailable(tr(STR_MEMENTO_CLOCK_UNAVAILABLE), tr(STR_MEMENTO_CLOCK_UNAVAILABLE_HINT));
+  }
+  if (!halClock.getDate(year, month, day, SETTINGS.clockUtcOffsetQ)) {
+    return renderMementoMoriUnavailable(tr(STR_MEMENTO_DATE_UNAVAILABLE), tr(STR_MEMENTO_SYNC_HINT));
   }
 
   const int32_t today = HalClock::daysFromCivil(year, month, day);
   const int32_t daysLived = today - HalClock::daysFromCivil(birthYear, birthMonth, birthDay);
   if (daysLived < 0) {
-    return renderDefaultSleepScreen();
+    return renderMementoMoriUnavailable(tr(STR_MEMENTO_DATE_BEFORE_BIRTH), tr(STR_MEMENTO_CHECK_DATES_HINT));
   }
 
   // Last birthday: this year's occurrence, or last year's if still ahead.
@@ -264,6 +269,21 @@ void SleepActivity::renderMementoMoriSleepScreen() const {
   renderer.drawCenteredText(NOTOSANS_18_FONT_ID, gridY + gridHeight + pageHeight / 16, formatted, true,
                             EpdFontFamily::BOLD);
 
+  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+}
+
+void SleepActivity::renderMementoMoriUnavailable(const char* reason, const char* action) const {
+  LOG_INF("SLP", "Memento Mori unavailable: %s", reason);
+  const int width = renderer.getScreenWidth();
+  const int height = renderer.getScreenHeight();
+  const int margin = 24;
+  renderer.clearScreen();
+  renderer.drawCenteredText(UI_12_FONT_ID, height / 3 - 40, tr(STR_MEMENTO_MORI), true, EpdFontFamily::BOLD);
+  UITheme::drawCenteredWrappedText(renderer, Rect{margin, height / 3, width - margin * 2, 90}, UI_10_FONT_ID, reason,
+                                   3);
+  UITheme::drawCenteredWrappedText(renderer, Rect{margin, height / 2, width - margin * 2, height / 4}, UI_10_FONT_ID,
+                                   action, 5);
+  renderer.drawCenteredText(SMALL_FONT_ID, height - 50, tr(STR_SLEEPING));
   renderer.displayBuffer(HalDisplay::HALF_REFRESH);
 }
 
