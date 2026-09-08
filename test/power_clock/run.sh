@@ -13,3 +13,9 @@ c++ -std=c++20 -O1 -Wall -Wextra -Isrc/network/ipp \
   src/network/ipp/IppPrintService.cpp src/network/ipp/HttpIppConnection.cpp \
   test/power_clock/connection.cpp -o "$BUILD_DIR/connection"
 "$BUILD_DIR/connection"
+c++ -std=c++20 -O1 -Wall -Wextra -Itest/power_clock/stubs -Isrc -Isrc/network/ipp \
+  src/network/ipp/RasterDecoder.cpp src/network/ipp/PageScaler.cpp \
+  src/network/ipp/IppWriter.cpp src/network/ipp/IppParser.cpp \
+  src/network/ipp/IppPrintService.cpp src/network/ipp/HttpIppConnection.cpp \
+  test/power_clock/printer_session.cpp -o "$BUILD_DIR/printer_session"
+"$BUILD_DIR/printer_session"

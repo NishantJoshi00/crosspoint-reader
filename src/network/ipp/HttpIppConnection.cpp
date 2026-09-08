@@ -6,6 +6,7 @@
 
 #include "IppLog.h"
 #include "IppParser.h"
+#include "IppProto.h"
 
 namespace {
 
@@ -53,6 +54,11 @@ void HttpIppConnection::serve(IppTransport& io, uint32_t (*upTime)(), bool allow
   while (keepAlive) {
     if (!handleOne(io, in, upTime, keepAlive, allowKeepAlive)) break;
   }
+}
+
+bool HttpIppConnection::serveOne(IppTransport& io, IppByteReader& in, uint32_t (*upTime)()) {
+  bool keepAlive = true;
+  return handleOne(io, in, upTime, keepAlive, true);
 }
 
 bool HttpIppConnection::sendSimple(IppTransport& io, const char* status, const char* body) {
@@ -128,20 +134,28 @@ bool HttpIppConnection::handleOne(IppTransport& io, IppByteReader& in, uint32_t 
   IppBodyReader body(in, chunked, contentLength, static_cast<uint64_t>(maxJobBytes) + 64 * 1024);
 
   IppRequest req;
-  if (!IppParser::parse(body, req)) {
+  if (!IppParser::parse(body, req, observer)) {
+    if (observer) observer->onRequestFinished(req.operationId, IppProto::STATUS_CLIENT_BAD_REQUEST);
     sendSimple(io, "400 Bad Request", "malformed IPP\n");
     return false;
   }
 
   const size_t ippLen = service.handle(req, body, respBuf, sizeof(respBuf), upTime());
   if (ippLen == 0) {
+    if (observer) observer->onRequestFinished(req.operationId, IppProto::STATUS_SERVER_INTERNAL_ERROR);
     sendSimple(io, "500 Internal Server Error", "response encode failure\n");
     return false;
   }
 
   // Leftover body (error paths, extra pages) must be consumed for keep-alive;
   // if the cap tripped we hard-close instead of reading an unbounded stream.
-  if (!body.drain() || body.exceededCap()) keepAlive = false;
+  const bool drained = body.drain() && !body.exceededCap();
+  if (!drained) keepAlive = false;
+  if (observer) {
+    const uint16_t status =
+        drained ? static_cast<uint16_t>((respBuf[2] << 8) | respBuf[3]) : IppProto::STATUS_CLIENT_BAD_REQUEST;
+    observer->onRequestFinished(req.operationId, status);
+  }
 
   if (!sendIppResponse(io, ippLen, keepAlive)) return false;
   return keepAlive;

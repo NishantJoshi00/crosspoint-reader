@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-// Only user input and completed pages renew the session, never discovery polls.
+// User input and print results renew the session, never discovery polls.
 class PrinterIdleTimer {
   static constexpr uint32_t DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
   uint32_t timeoutMs = DEFAULT_TIMEOUT_MS;
