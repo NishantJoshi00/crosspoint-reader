@@ -599,6 +599,10 @@ void loop() {
 
   const unsigned long activityStartTime = millis();
   activityManager.loop();
+  if (activityManager.wantsAutoSleep()) {
+    enterDeepSleep(true);
+    return;
+  }
   const unsigned long activityDuration = millis() - activityStartTime;
 
   const unsigned long loopDuration = millis() - loopStartTime;

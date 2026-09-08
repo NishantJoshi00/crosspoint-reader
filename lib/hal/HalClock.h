@@ -15,6 +15,7 @@ class HalClock {
   mutable unsigned long _lastPollMs = 0;
 
   static constexpr unsigned long CLOCK_POLL_MS = 10000;  // 10 seconds
+  bool readDateTime(Rtc::DateTime& dt) const;
 
  public:
   // Call after BoardConfig has selected the active device.
@@ -22,6 +23,9 @@ class HalClock {
 
   // True if an RTC is present on this device
   bool isAvailable() const { return _available; }
+
+  // Read the clock now. A past successful sync does not prove it still has time.
+  bool hasValidTime() const;
 
   // Get current hour (0-23) and minute (0-59).
   // Returns false if RTC is not available.
@@ -48,7 +52,7 @@ class HalClock {
   // Blocks for up to ~5s while waiting for SNTP response.
   // Returns true if the RTC was successfully updated.
   //
-  // Debouncing (skip if already synced once) is enforced by the caller, not here,
+  // Debouncing (skip if already synced and still valid) is enforced by the caller, not here,
   // so the HAL stays free of any app-layer settings dependency.
   bool syncFromNTP();
 };

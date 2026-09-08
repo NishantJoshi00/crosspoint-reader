@@ -35,11 +35,11 @@ class RasterDecoder {
 
  private:
   PageSink& sink;
-  uint8_t row[MAX_WIDTH_PX];  // gray output row handed to the sink
-  uint8_t literal[128 * 3];   // one literal run: <=128 pixels, <=3 B/px
+  uint8_t row[MAX_WIDTH_PX] = {};  // gray output row handed to the sink
+  uint8_t literal[128 * 3] = {};   // one literal run: <=128 pixels, <=3 B/px
   // PWG page header prefix holding every field we read (offsets < 424). Member,
   // not a local: 424 bytes would blow the <256B stack-local budget.
-  uint8_t pwgHdr[IppProto::PWG_OFF_NUM_COLORS + 4];
+  uint8_t pwgHdr[IppProto::PWG_OFF_NUM_COLORS + 4] = {};
 
   static bool skipRemainder(IppBodyReader& body, size_t len);
   Result decodePage(IppBodyReader& body, uint32_t width, uint32_t height, uint32_t bytesPerPixel, bool whiteIsFF,

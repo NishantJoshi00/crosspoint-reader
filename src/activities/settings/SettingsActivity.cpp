@@ -2,6 +2,7 @@
 
 #include <BoardConfig.h>
 #include <GfxRenderer.h>
+#include <HalClock.h>
 #include <Logging.h>
 
 #include <algorithm>
@@ -480,11 +481,11 @@ void SettingsActivity::openSleepTimeoutPicker() {
 // active sleep screen and either is missing, offer the missing setup steps
 // directly; each option deep-links into the corresponding flow, and each flow
 // re-invokes this on completion until nothing is missing. Back dismisses; the
-// sleep screen then falls back to the default rendering until setup is done.
+// sleep screen then explains what is missing until setup is done.
 void SettingsActivity::showMementoMoriSetupPopup() {
   if (SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::MEMENTO_MORI) return;
   const bool needsBirthdate = !SETTINGS.hasValidBirthdate();
-  const bool needsClockSync = !SETTINGS.clockHasBeenSynced;
+  const bool needsClockSync = halClock.isAvailable() && !halClock.hasValidTime();
   if (!needsBirthdate && !needsClockSync) return;
 
   StrId options[2];

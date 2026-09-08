@@ -21,7 +21,7 @@ class IppTransport {
 // syscall per byte. Buffer is a fixed member — no heap.
 class IppByteReader {
   IppTransport& io;
-  uint8_t buf[512];
+  uint8_t buf[512] = {};
   size_t fill = 0;
   size_t pos = 0;
 

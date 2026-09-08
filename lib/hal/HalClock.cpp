@@ -9,27 +9,47 @@ HalClock halClock;  // Singleton instance
 
 void HalClock::begin() {
   _available = _sdkRtc.begin();
+  _hasCachedTime = false;
+  _lastPollMs = 0;
   LOG_INF("CLK", _available ? "SDK RTC found" : "RTC not found");
+}
+
+bool HalClock::readDateTime(Rtc::DateTime& dt) const {
+  if (!_available) return false;
+
+  // Retry one failed transaction without turning on Wi-Fi or accepting stale
+  // dates. The SDK rejects oscillator-stop flags; also reject malformed dates.
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    if (!_sdkRtc.now(dt)) continue;
+    if (dt.year < 1900 || dt.year > 2099 || dt.month < 1 || dt.month > 12 || dt.day < 1 || dt.hour > 23 ||
+        dt.minute > 59 || dt.second > 59)
+      continue;
+    const int nextMonth = dt.month == 12 ? 1 : dt.month + 1;
+    const int nextYear = dt.year + (dt.month == 12 ? 1 : 0);
+    const int daysInMonth = daysFromCivil(nextYear, nextMonth, 1) - daysFromCivil(dt.year, dt.month, 1);
+    if (dt.day <= daysInMonth) return true;
+  }
+  _hasCachedTime = false;
+  return false;
+}
+
+bool HalClock::hasValidTime() const {
+  Rtc::DateTime dt;
+  return readDateTime(dt);
 }
 
 bool HalClock::getTime(uint8_t& hour, uint8_t& minute) const {
   if (!_available) return false;
 
   const unsigned long now = millis();
-  if (_lastPollMs != 0 && (now - _lastPollMs) < CLOCK_POLL_MS) {
+  if (_hasCachedTime && (now - _lastPollMs) < CLOCK_POLL_MS) {
     hour = _cachedHour;
     minute = _cachedMinute;
     return true;
   }
 
   Rtc::DateTime dt;
-  if (!_sdkRtc.now(dt)) {
-    if (!_hasCachedTime) return false;
-    _lastPollMs = now;
-    hour = _cachedHour;
-    minute = _cachedMinute;
-    return true;
-  }
+  if (!readDateTime(dt)) return false;
   _cachedHour = dt.hour;
   _cachedMinute = dt.minute;
   _lastPollMs = now;
@@ -67,7 +87,7 @@ bool HalClock::getDate(uint16_t& year, uint8_t& month, uint8_t& day, uint8_t utc
   if (!_available) return false;
 
   Rtc::DateTime dt;
-  if (!_sdkRtc.now(dt)) return false;
+  if (!readDateTime(dt)) return false;
 
   if (utcOffsetQuarterHoursBiased > 104) utcOffsetQuarterHoursBiased = 104;
   const int offsetMinutes = (static_cast<int>(utcOffsetQuarterHoursBiased) - 48) * 15;
@@ -126,6 +146,8 @@ bool HalClock::syncFromNTP() {
   }
 
   LOG_INF("CLK", "Starting NTP sync...");
+  if (esp_sntp_enabled()) esp_sntp_stop();
+  sntp_set_sync_status(SNTP_SYNC_STATUS_RESET);
   configTzTime("UTC0", "pool.ntp.org", "time.nist.gov");
 
   // Wait for SNTP sync to complete (up to 5 seconds)
@@ -135,6 +157,8 @@ bool HalClock::syncFromNTP() {
       time_t now = time(nullptr);
       struct tm timeinfo;
       gmtime_r(&now, &timeinfo);
+      // This is a one-shot sync; no periodic NTP traffic during network sessions.
+      esp_sntp_stop();
 
       Rtc::DateTime dt;
       dt.year = static_cast<uint16_t>(timeinfo.tm_year + 1900);
@@ -144,8 +168,8 @@ bool HalClock::syncFromNTP() {
       dt.minute = static_cast<uint8_t>(timeinfo.tm_min);
       dt.second = static_cast<uint8_t>(timeinfo.tm_sec);
       dt.weekday = static_cast<uint8_t>(timeinfo.tm_wday);
-      if (_sdkRtc.set(dt)) {
-        _lastPollMs = 0;
+      if (_sdkRtc.set(dt) && readDateTime(dt)) {
+        _lastPollMs = millis();
         _cachedHour = dt.hour;
         _cachedMinute = dt.minute;
         _hasCachedTime = true;
@@ -153,11 +177,14 @@ bool HalClock::syncFromNTP() {
                 dt.second);
         return true;
       }
+      _hasCachedTime = false;
+      LOG_ERR("CLK", "RTC did not retain a valid date after sync");
       return false;
     }
     delay(100);
   }
 
+  esp_sntp_stop();
   LOG_ERR("CLK", "NTP sync timed out");
   return false;
 }

@@ -47,11 +47,11 @@ bool valueContains(const char* value, const char* token) {
 
 }  // namespace
 
-void HttpIppConnection::serve(IppTransport& io, uint32_t (*upTime)()) {
+void HttpIppConnection::serve(IppTransport& io, uint32_t (*upTime)(), bool allowKeepAlive) {
   IppByteReader in(io);
   bool keepAlive = true;
   while (keepAlive) {
-    if (!handleOne(io, in, upTime, keepAlive)) break;
+    if (!handleOne(io, in, upTime, keepAlive, allowKeepAlive)) break;
   }
 }
 
@@ -77,7 +77,8 @@ bool HttpIppConnection::sendIppResponse(IppTransport& io, size_t ippLen, bool ke
   return io.write(reinterpret_cast<const uint8_t*>(hdr), static_cast<size_t>(n)) && io.write(respBuf, ippLen);
 }
 
-bool HttpIppConnection::handleOne(IppTransport& io, IppByteReader& in, uint32_t (*upTime)(), bool& keepAlive) {
+bool HttpIppConnection::handleOne(IppTransport& io, IppByteReader& in, uint32_t (*upTime)(), bool& keepAlive,
+                                  bool allowKeepAlive) {
   if (!in.readLine(line, sizeof(line))) return false;  // idle close or timeout
   if (line[0] == '\0') return true;                    // stray blank line between requests
 
@@ -90,7 +91,7 @@ bool HttpIppConnection::handleOne(IppTransport& io, IppByteReader& in, uint32_t 
   bool chunked = false;
   bool expectContinue = false;
   bool isIpp = false;
-  keepAlive = true;
+  keepAlive = allowKeepAlive;
   while (true) {
     if (!in.readLine(line, sizeof(line))) return false;
     if (line[0] == '\0') break;
@@ -110,7 +111,7 @@ bool HttpIppConnection::handleOne(IppTransport& io, IppByteReader& in, uint32_t 
   if (isGet) {
     // Health probe convenience; not part of the IPP surface.
     sendSimple(io, "200 OK", "CrossPoint X3 IPP printer\n");
-    return keepAlive;
+    return false;  // sendSimple advertises Connection: close.
   }
   if (!isPost || !isIpp) {
     sendSimple(io, "404 Not Found", "IPP endpoint only\n");

@@ -71,9 +71,10 @@ void ClockSyncActivity::runSync() {
     return;
   }
 
-  // Mark as synced so the auto-sync hook stops firing on future WiFi connects.
-  SETTINGS.clockHasBeenSynced = 1;
-  SETTINGS.saveToFile();
+  if (!SETTINGS.clockHasBeenSynced) {
+    SETTINGS.clockHasBeenSynced = 1;
+    SETTINGS.saveToFile();
+  }
 
   // Read the freshly synced time back for the user-facing confirmation.
   char buf[9];
@@ -130,7 +131,8 @@ void ClockSyncActivity::render(RenderLock&&) {
       break;
     case FAILED:
       renderer.drawCenteredText(UI_12_FONT_ID, midY - 20, tr(STR_CLOCK_SYNC_FAIL), true, EpdFontFamily::BOLD);
-      renderer.drawCenteredText(UI_10_FONT_ID, midY + 10, tr(STR_CHECK_SERIAL_OUTPUT));
+      UITheme::drawCenteredWrappedText(renderer, Rect{24, midY + 10, pageWidth - 48, 120}, UI_10_FONT_ID,
+                                       tr(STR_CLOCK_SYNC_RETRY_HINT), 4);
       break;
   }
 

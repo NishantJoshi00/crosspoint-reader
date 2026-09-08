@@ -22,8 +22,9 @@ lived — a bare number, no label.
   validated; invalid input reopens the keyboard; empty clears).
 - **Visibility**: the "Memento Mori" option appears in the on-device Sleep
   Screen picker only once a valid birthdate exists.
-- **No date / no birthdate**: fall back silently to the default dark sleep
-  screen (same pattern as COVER falling back with no book).
+- **No date / no birthdate**: superseded on 2026-09-07. Show a light Memento
+  Mori screen with the missing prerequisite and the recovery action. See
+  [offline clock and printer standby](2026-09-07-offline-clock-printer-standby.md).
 
 ## Architecture
 

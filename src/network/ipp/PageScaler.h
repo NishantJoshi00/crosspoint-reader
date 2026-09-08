@@ -44,11 +44,11 @@ class PageScaler final : public PageSink {
   bool active = false;
   bool aborted = false;
 
-  uint32_t sum[MAX_TARGET_WIDTH];
-  uint16_t cnt[MAX_TARGET_WIDTH];
-  int16_t err[MAX_TARGET_WIDTH + 2];      // FS error carried into the next row
-  int16_t nextErr[MAX_TARGET_WIDTH + 2];  // member, not a local: too big for the stack
-  uint8_t rowBits[MAX_ROW_BYTES];
+  uint32_t sum[MAX_TARGET_WIDTH] = {};
+  uint16_t cnt[MAX_TARGET_WIDTH] = {};
+  int16_t err[MAX_TARGET_WIDTH + 2] = {};      // FS error carried into the next row
+  int16_t nextErr[MAX_TARGET_WIDTH + 2] = {};  // member, not a local: too big for the stack
+  uint8_t rowBits[MAX_ROW_BYTES] = {};
 
   void resetAccumulators();
   void flushTargetRow();

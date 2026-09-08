@@ -194,7 +194,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t clockUtcOffsetQ = 48;
   // Clock display format: 0 = 24-hour, 1 = 12-hour
   uint8_t clockFormat = 0;
-  // Set once an NTP sync succeeds. Used to skip re-syncing on every WiFi connect.
+  // Historical sync flag. Skip automatic sync only while the RTC is also valid.
   // Resetting to 0 (e.g. via the web UI) forces a re-sync on next WiFi connect.
   uint8_t clockHasBeenSynced = 0;
   // Text rendering settings

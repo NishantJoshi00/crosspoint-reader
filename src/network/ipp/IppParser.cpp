@@ -61,7 +61,8 @@ bool IppParser::parse(IppBodyReader& body, IppRequest& out) {
       const size_t keep = nameLen < sizeof(curName) - 1 ? nameLen : sizeof(curName) - 1;
       if (!body.readExact(reinterpret_cast<uint8_t*>(curName), keep)) return false;
       curName[keep] = '\0';
-      if (keep < nameLen && !skipBytes(body, nameLen - keep)) return false;
+      // skipBytes also handles zero bytes when the complete name fits.
+      if (!skipBytes(body, nameLen - keep)) return false;
     }
 
     uint16_t valLen;
