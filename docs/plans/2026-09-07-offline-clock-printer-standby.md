@@ -27,7 +27,7 @@ condition caused the reported idle print failure is not yet established.
   Valid clock readings do not cause repeated automatic syncs or settings writes.
 - Printer mode uses the configured sleep timeout, starting when the service is
   ready. The countdown shows remaining minutes, rounded up, and refreshes once a
-  minute. The mapped Confirm button is labeled "Reset timer". Button presses and
+  minute. The mapped Confirm button is labeled "Reset". Button presses and
   print results renew the timer. Discovery requests do not.
 - Timer expiry shows "Printer asleep", explains that Wi-Fi is off, and tells the
   user to wake with Power and reopen Printer. This screen takes priority over the
@@ -100,7 +100,7 @@ Device checks remain necessary when the user chooses to install the follow-up:
    wait at least a minute without touching the reader, then print. The first
    receiving message must appear without a button press, followed automatically
    by the page. Completion must renew the countdown.
-2. Let the countdown decrease and press the button labeled Reset timer. It must
+2. Let the countdown decrease and press the button labeled Reset. It must
    return to two minutes. Repeat while viewing a stored page.
 3. Leave the computer's print dialog open so discovery continues. Let the timer
    expire. Check the Printer asleep screen, radio shutdown, deep sleep, and wake
