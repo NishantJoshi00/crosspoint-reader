@@ -19,3 +19,6 @@ c++ -std=c++20 -O1 -Wall -Wextra -Itest/power_clock/stubs -Isrc -Isrc/network/ip
   src/network/ipp/IppPrintService.cpp src/network/ipp/HttpIppConnection.cpp \
   test/power_clock/printer_session.cpp -o "$BUILD_DIR/printer_session"
 "$BUILD_DIR/printer_session"
+c++ -std=c++20 -O1 -Wall -Wextra -Isrc \
+  test/power_clock/printer_preview.cpp -o "$BUILD_DIR/printer_preview"
+"$BUILD_DIR/printer_preview"

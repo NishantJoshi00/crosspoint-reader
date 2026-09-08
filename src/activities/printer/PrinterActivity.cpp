@@ -51,22 +51,34 @@ PrinterActivity::~PrinterActivity() = default;
 
 bool PrinterActivity::Sink::onScaledPageBegin(uint32_t pageIndex, int boxX, int boxY, int boxW, int boxH) {
   (void)boxX;
-  (void)boxY;
   (void)boxW;
-  (void)boxH;
+  firstRow = boxY;
+  preview.begin(millis(), boxH);
   LOG_DBG("PRINT", "Receiving page %u, free heap: %d", static_cast<unsigned>(pageIndex), ESP.getFreeHeap());
   activity.renderer.clearScreen();
   return true;
 }
 
 bool PrinterActivity::Sink::onScaledRow(int y, int xOffset, const uint8_t* rowBits, int width) {
-  // Rows accumulate silently in the framebuffer; the finished page is shown in
-  // a single refresh at page end. Intermediate refreshes cost ~0.5s each on
-  // e-ink, which made the whole print feel slow.
   if (activity.activeClient && !activity.activeClient->transport.poll()) return false;
   const GfxRenderer& renderer = activity.renderer;
   for (int x = 0; x < width; x++) {
     if (rowBits[x >> 3] & (0x80 >> (x & 7))) renderer.drawPixel(xOffset + x, y, true);
+  }
+  const int footerHeight = renderer.getLineHeight(SMALL_FONT_ID) + 12;
+  const int footerY = renderer.getScreenHeight() - footerHeight;
+  // The preview footer is below all decoded rows, in the still-white portion
+  // of the page. Restore it immediately after sending, so labels never enter
+  // the finished image or its saved BMP. No extra image/strip buffer is needed.
+  if (y < footerY) {
+    const uint32_t percent = preview.onRow(millis(), y - firstRow + 1);
+    if (percent != 0) {
+      char label[64];
+      snprintf(label, sizeof(label), tr(STR_PRINTER_PROGRESS_FORMAT), static_cast<unsigned>(percent));
+      renderer.drawCenteredText(SMALL_FONT_ID, footerY + 4, label);
+      renderer.displayBufferPreview();
+      renderer.fillRect(0, y + 1, renderer.getScreenWidth(), renderer.getScreenHeight() - y - 1, false);
+    }
   }
   resetTaskWatchdogIfSubscribed();
   return true;
@@ -78,7 +90,7 @@ void PrinterActivity::Sink::onScaledPageEnd(bool ok, uint32_t pageIndex) {
   // Present the complete page synchronously before SD writes or HTTP cleanup.
   // Back is never needed to flush a deferred render or reveal a finished page.
   activity.state = PrinterState::PAGE_SHOWING;
-  activity.renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  activity.displayPrintBuffer();
   activity.pageSaved = activity.savePageToQueue();
   activity.renewTimeout();
   activity.drawPageHints();
@@ -382,7 +394,19 @@ void PrinterActivity::renderPrintStatus(const char* title, const char* detail, b
   const auto labels = mappedInput.mapLabels(receiving ? tr(STR_CANCEL) : tr(STR_BACK),
                                             receiving ? "" : tr(STR_PRINTER_RESET_TIMER), "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  displayPrintBuffer();
+}
+
+void PrinterActivity::displayPrintBuffer() const {
+  if (sink && sink->finishPreview()) {
+    // Decoding has stopped and the caller holds RenderLock. Complete the last
+    // provisional waveform, then replace its uncertain baseline and all panel
+    // pixels with the stable frame. HAL HALF forces X3 resync + conditioning.
+    renderer.waitRefreshComplete();
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  } else {
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  }
 }
 
 void PrinterActivity::updateNetwork() {

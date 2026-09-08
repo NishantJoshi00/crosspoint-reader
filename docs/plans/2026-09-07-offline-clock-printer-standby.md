@@ -50,7 +50,22 @@ condition caused the reported idle print failure is not yet established.
   Decode failures, interrupted transfers, timeouts and cancellation are visible.
   Back during a print cancels and stays in Printer; if the page has already
   completed, it remains visible. SD save failure is shown beside the countdown.
-  There are no per-row progress refreshes or extra page-sized buffers.
+  Long prints show at most three previews near 25%, 50% and 75%, at least two
+  seconds apart. Fast prints skip previews. The preview percentage measures
+  decoded image rows. Its temporary Receiving footer sits below those rows and
+  is removed from RAM immediately after sending, so the saved BMP stays clean.
+  There are no per-row refreshes or extra image buffers.
+- X3 previews may continue decoding into the framebuffer while the panel runs
+  its refresh waveform. The driver's later read of that live buffer can make
+  its retained differential baseline disagree with the visible preview; those
+  temporary glitches are accepted. This behavior has an explicit preview API;
+  the ordinary async API still requires a stable framebuffer. Other panels,
+  inverted displays and the fading-fix path use blocking previews.
+- After any preview, both completion and failure stop framebuffer writes, finish
+  the pending waveform, and use a HALF refresh. On X3 the HAL turns this into a
+  forced resync with conditioning, replacing the uncertain baseline and showing
+  the stable final image or failure message. Jobs with no preview keep the fast
+  completion path. No glitch pixels are added to the image data.
 - Network loss replaces the ready screen with a reconnecting message. On
   reconnection, the listener, address and discovery advertisement are refreshed.
   Discovery failure leaves the direct printer address visible. Startup failure
@@ -77,6 +92,11 @@ before a missing HTTP tail, Back during cleanup, latched cancellation, and idle
 and total transfer limits. Printing tests run without button input.
 The CI unit-test job runs this suite.
 
+Preview tests cover the three-refresh budget, two-second spacing, row progress,
+fast-job suppression, cancellation cleanup, a new job after cancellation, and
+millisecond-counter wrap. Host tests cannot establish the visual effect or
+physical refresh quality on a panel.
+
 Build the X3/X4 firmware with `pio run -e default`.
 
 Verified on 2026-09-07: the X3/X4 build, clock/timer/protocol regressions, full
@@ -100,6 +120,8 @@ Device checks remain necessary when the user chooses to install the follow-up:
    wait at least a minute without touching the reader, then print. The first
    receiving message must appear without a button press, followed automatically
    by the page. Completion must renew the countdown.
+   With a slow print, verify the progressive previews and final resync. Compare
+   the saved BMP with the intended image; no preview label should be saved.
 2. Let the countdown decrease and press the button labeled Reset. It must
    return to two minutes. Repeat while viewing a stored page.
 3. Leave the computer's print dialog open so discovery continues. Let the timer

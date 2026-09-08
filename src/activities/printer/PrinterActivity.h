@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "PrinterIdleTimer.h"
+#include "PrinterPreview.h"
 #include "activities/Activity.h"
 #include "network/ipp/HttpIppConnection.h"
 #include "network/ipp/IppPrintService.h"
@@ -59,12 +60,15 @@ class PrinterActivity final : public Activity, private IppRequestObserver {
   // staging buffer (48 KB the device does not have with WiFi up).
   class Sink final : public ScaledPageSink {
     PrinterActivity& activity;
+    PrinterPreview preview;
+    int firstRow = 0;
 
    public:
     explicit Sink(PrinterActivity& a) : activity(a) {}
     bool onScaledPageBegin(uint32_t pageIndex, int boxX, int boxY, int boxW, int boxH) override;
     bool onScaledRow(int y, int xOffset, const uint8_t* rowBits, int width) override;
     void onScaledPageEnd(bool ok, uint32_t pageIndex) override;
+    bool finishPreview() { return preview.finish(); }
   };
 
   PrinterState state = PrinterState::MODE_SELECT;
@@ -113,6 +117,7 @@ class PrinterActivity final : public Activity, private IppRequestObserver {
   void onRequestStarted(uint16_t operationId) override;
   void onRequestFinished(uint16_t operationId, uint16_t status) override;
   void renderPrintStatus(const char* title, const char* detail, bool receiving) const;
+  void displayPrintBuffer() const;
   void renewTimeout();
   void drawTimeout() const;
   void clearJob();  // abort an in-flight job (Left held during transfer)
