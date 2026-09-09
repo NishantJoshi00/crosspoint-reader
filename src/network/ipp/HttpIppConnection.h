@@ -14,7 +14,8 @@ class HttpIppConnection {
  public:
   static constexpr size_t RESPONSE_CAP = 4096;
 
-  HttpIppConnection(IppPrintService& service, uint32_t maxJobBytes) : service(service), maxJobBytes(maxJobBytes) {}
+  HttpIppConnection(IppPrintService& service, uint32_t maxJobBytes, IppRequestObserver* observer = nullptr)
+      : service(service), maxJobBytes(maxJobBytes), observer(observer) {}
 
   // Serves requests on this transport until the peer closes, errors, or sends
   // Connection: close. upTimeSeconds is sampled per-request via the callback.
@@ -22,9 +23,16 @@ class HttpIppConnection {
   // request returns control to input, countdown rendering, and sleep checks.
   void serve(IppTransport& io, uint32_t (*upTime)(), bool allowKeepAlive = true);
 
+  // One request per turn. Retain `in` with its transport between calls: the
+  // buffer can contain the start of the next pipelined request. The caller
+  // waits for buffered/socket data without blocking on idle connections.
+  // Returns true when this connection can be reused.
+  bool serveOne(IppTransport& io, IppByteReader& in, uint32_t (*upTime)());
+
  private:
   IppPrintService& service;
   uint32_t maxJobBytes;
+  IppRequestObserver* observer;
   uint8_t respBuf[RESPONSE_CAP] = {};
   char line[512] = {};
 

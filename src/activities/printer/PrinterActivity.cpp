@@ -11,6 +11,7 @@
 #include <mdns.h>  // subtype API; ESPmDNS does not expose it
 
 #include "CrossPointSettings.h"
+#include "PrinterClientSession.h"
 #include "SilentRestart.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
@@ -28,7 +29,6 @@ constexpr const char* PRINTER_NAME = "penguin";
 constexpr uint8_t AP_CHANNEL = 1;
 constexpr uint8_t AP_MAX_CONNECTIONS = 2;
 constexpr uint16_t IPP_PORT = 631;
-constexpr unsigned long CLIENT_READ_TIMEOUT_MS = 2500;
 constexpr int QR_SIZE = 198;
 constexpr int MODE_ITEM_COUNT = 2;
 constexpr const char* QUEUE_DIR = "/printouts";
@@ -37,84 +37,48 @@ constexpr int PENGUIN_ART_SIZE = 96;
 
 uint32_t upTimeSeconds() { return millis() / 1000; }
 
-// IppTransport over a connected NetworkClient. While waiting for bytes it
-// pumps input (Back aborts-and-exits, Left aborts-and-stays) and the watchdog.
-class WiFiClientTransport final : public IppTransport {
-  static constexpr int YIELD_EVERY_READS = 32;
+}  // namespace
 
-  NetworkClient& client;
-  MappedInputManager& input;
-  int readsSinceYield = 0;
-
-  bool pollInput() {
-    input.update();
-    userActivity = userActivity || input.wasAnyPressed();
-    backPressed = backPressed || input.wasPressed(MappedInputManager::Button::Back);
-    clearPressed = clearPressed || input.wasPressed(MappedInputManager::Button::Left);
-    return !backPressed && !clearPressed;
-  }
-
+class PrinterActivity::ClientSession final : public PrinterClientSession<NetworkClient, MappedInputManager> {
  public:
-  bool backPressed = false;
-  bool clearPressed = false;
-  bool userActivity = false;
-
-  WiFiClientTransport(NetworkClient& client, MappedInputManager& input) : client(client), input(input) {}
-
-  int read(uint8_t* buf, size_t maxLen) override {
-    const unsigned long start = millis();
-    while (client.connected()) {
-      const int avail = client.available();
-      if (avail > 0) {
-        // A real job streams for many seconds without ever going idle, so the
-        // watchdog must be fed on the data path too — not just when waiting.
-        resetTaskWatchdogIfSubscribed();
-        if (++readsSinceYield >= YIELD_EVERY_READS) {
-          readsSinceYield = 0;
-          delay(1);
-          if (!pollInput()) return -1;
-        }
-        return client.read(buf, maxLen);
-      }
-      if (millis() - start > CLIENT_READ_TIMEOUT_MS) return -1;
-      resetTaskWatchdogIfSubscribed();
-      if (!pollInput()) return -1;
-      delay(2);
-    }
-    return 0;
-  }
-
-  bool write(const uint8_t* buf, size_t len) override {
-    while (len > 0) {
-      const size_t n = client.write(buf, len);
-      if (n == 0) return false;
-      buf += n;
-      len -= n;
-    }
-    return true;
-  }
+  ClientSession(NetworkClient client, MappedInputManager& input) : PrinterClientSession(std::move(client), input) {}
 };
 
-}  // namespace
+PrinterActivity::PrinterActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
+    : Activity("Printer", renderer, mappedInput) {}
+
+PrinterActivity::~PrinterActivity() = default;
 
 bool PrinterActivity::Sink::onScaledPageBegin(uint32_t pageIndex, int boxX, int boxY, int boxW, int boxH) {
   (void)boxX;
-  (void)boxY;
   (void)boxW;
-  (void)boxH;
+  firstRow = boxY;
+  preview.begin(millis(), boxH);
   LOG_DBG("PRINT", "Receiving page %u, free heap: %d", static_cast<unsigned>(pageIndex), ESP.getFreeHeap());
-  activity.state = PrinterState::PAGE_SHOWING;
   activity.renderer.clearScreen();
   return true;
 }
 
 bool PrinterActivity::Sink::onScaledRow(int y, int xOffset, const uint8_t* rowBits, int width) {
-  // Rows accumulate silently in the framebuffer; the finished page is shown in
-  // a single refresh at page end. Intermediate refreshes cost ~0.5s each on
-  // e-ink, which made the whole print feel slow.
+  if (activity.activeClient && !activity.activeClient->transport.poll()) return false;
   const GfxRenderer& renderer = activity.renderer;
   for (int x = 0; x < width; x++) {
     if (rowBits[x >> 3] & (0x80 >> (x & 7))) renderer.drawPixel(xOffset + x, y, true);
+  }
+  const int footerHeight = renderer.getLineHeight(SMALL_FONT_ID) + 12;
+  const int footerY = renderer.getScreenHeight() - footerHeight;
+  // The preview footer is below all decoded rows, in the still-white portion
+  // of the page. Restore it immediately after sending, so labels never enter
+  // the finished image or its saved BMP. No extra image/strip buffer is needed.
+  if (y < footerY) {
+    const uint32_t percent = preview.onRow(millis(), y - firstRow + 1);
+    if (percent != 0) {
+      char label[64];
+      snprintf(label, sizeof(label), tr(STR_PRINTER_PROGRESS_FORMAT), static_cast<unsigned>(percent));
+      renderer.drawCenteredText(SMALL_FONT_ID, footerY + 4, label);
+      renderer.displayBufferPreview();
+      renderer.fillRect(0, y + 1, renderer.getScreenWidth(), renderer.getScreenHeight() - y - 1, false);
+    }
   }
   resetTaskWatchdogIfSubscribed();
   return true;
@@ -122,17 +86,15 @@ bool PrinterActivity::Sink::onScaledRow(int y, int xOffset, const uint8_t* rowBi
 
 void PrinterActivity::Sink::onScaledPageEnd(bool ok, uint32_t pageIndex) {
   (void)pageIndex;
-  if (!ok) {
-    activity.state = PrinterState::RUNNING;
-    activity.requestUpdate();
-    return;
-  }
-  // Persist before stamping hints so the stored page is clean, then show the
-  // hints over it — the page IS the framebuffer, there is no copy to repaint.
-  activity.savePageToQueue();
+  if (!ok) return;  // The request completion callback displays the failure.
+  // Present the complete page synchronously before SD writes or HTTP cleanup.
+  // Back is never needed to flush a deferred render or reveal a finished page.
+  activity.state = PrinterState::PAGE_SHOWING;
+  activity.displayPrintBuffer();
+  activity.pageSaved = activity.savePageToQueue();
   activity.renewTimeout();
   activity.drawPageHints();
-  LOG_DBG("PRINT", "Page complete, free heap: %d", ESP.getFreeHeap());
+  LOG_INF("PRINT", "Page displayed, saved=%d, free heap: %d", activity.pageSaved, ESP.getFreeHeap());
 }
 
 void PrinterActivity::onEnter() {
@@ -224,7 +186,9 @@ void PrinterActivity::startServices() {
   sink = makeUniqueNoThrow<Sink>(*this);
   if (sink)
     service = makeUniqueNoThrow<IppPrintService>(cfg, *sink, renderer.getScreenWidth(), renderer.getScreenHeight());
-  if (service) connection = makeUniqueNoThrow<HttpIppConnection>(*service, cfg.maxJobBytes);
+  if (service)
+    connection =
+        makeUniqueNoThrow<HttpIppConnection>(*service, cfg.maxJobBytes, static_cast<IppRequestObserver*>(this));
   if (!connection) {
     LOG_ERR("PRINT", "OOM: IPP service");
     failStart();
@@ -251,6 +215,7 @@ void PrinterActivity::startServices() {
 }
 
 void PrinterActivity::failStart() {
+  closeClients();
   server.end();
   serverStarted = false;
   MDNS.end();
@@ -301,6 +266,7 @@ void PrinterActivity::startMdns() {
 
 void PrinterActivity::onExit() {
   Activity::onExit();
+  closeClients();
   if (serverStarted) server.end();
   MDNS.end();
   connection.reset();
@@ -329,6 +295,120 @@ void PrinterActivity::clearJob() {
 
 void PrinterActivity::renewTimeout() { idleTimer.renew(millis()); }
 
+void PrinterActivity::closeClients() {
+  for (auto& client : clients) {
+    if (client) client->client.stop();
+    client.reset();
+  }
+}
+
+void PrinterActivity::pollClients() {
+  // Hold a few connections because print dialogs can leave discovery sockets
+  // idle while opening a different socket for the actual print. Never wait for
+  // bytes on an idle socket while another socket already has work.
+  for (auto& session : clients) {
+    if (session && !session->ready() && session->expired(millis())) {
+      session->client.stop();
+      session.reset();
+    }
+    if (!session) {
+      NetworkClient client = server.accept();
+      if (client) {
+        client.setNoDelay(true);
+        client.setTimeout(1000);
+        session = makeUniqueNoThrow<ClientSession>(client, mappedInput);
+        if (!session) client.stop();
+      }
+    }
+  }
+
+  for (size_t offset = 0; offset < MAX_CLIENTS; ++offset) {
+    const size_t index = (nextClient + offset) % MAX_CLIENTS;
+    auto& session = clients[index];
+    if (!session || !session->ready()) continue;
+    nextClient = (index + 1) % MAX_CLIENTS;
+    RenderLock lock(*this);
+    activeClient = session.get();
+    const bool keepAlive = session->serveOne(*connection, upTimeSeconds);
+    const auto& transport = session->transport;
+    if (transport.userActivity) renewTimeout();
+    // Once a print has started, Back can only cancel that print. If the page
+    // already finished, keep it visible even if Back interrupted HTTP cleanup.
+    // Never turn a transfer cancellation into an exit/restart.
+    if (!transport.printStarted) {
+      if (transport.backPressed) {
+        if (state == PrinterState::PAGE_SHOWING || state == PrinterState::PRINT_FAILED)
+          clearJob();
+        else
+          onGoHome(HomeMenuItem::PRINTER);
+      } else if (transport.userActivity) {
+        requestUpdate();
+      }
+    }
+    activeClient = nullptr;
+    if (!keepAlive) {
+      session->client.stop();
+      session.reset();
+    }
+    return;  // Input, pending renders and the battery timer run between requests.
+  }
+}
+
+void PrinterActivity::onRequestStarted(uint16_t operationId) {
+  if (operationId != IppProto::OP_PRINT_JOB) return;
+  if (activeClient) activeClient->transport.printStarted = true;
+  state = PrinterState::RECEIVING;
+  printError = nullptr;
+  LOG_INF("PRINT", "Print header received; displaying receiving status");
+  renderer.clearScreen();
+  renderPrintStatus(tr(STR_PRINTER_RECEIVING), tr(STR_PRINTER_RECEIVING_HINT), true);
+}
+
+void PrinterActivity::onRequestFinished(uint16_t operationId, uint16_t status) {
+  if (operationId != IppProto::OP_PRINT_JOB) return;
+  if (state == PrinterState::PAGE_SHOWING) return;  // A finished page survives trailing-body failures/cancel.
+  state = PrinterState::PRINT_FAILED;
+  const auto* transport = activeClient ? &activeClient->transport : nullptr;
+  if (transport && (transport->backPressed || transport->clearPressed)) {
+    printError = tr(STR_PRINTER_CANCELLED);
+  } else if (transport && transport->timedOut) {
+    printError = transport->deadlineExceeded ? tr(STR_PRINTER_TRANSFER_LIMIT) : tr(STR_PRINTER_TRANSFER_TIMEOUT);
+  } else if (status == IppProto::STATUS_CLIENT_FORMAT_NOT_SUPPORTED || status == IppProto::STATUS_CLIENT_FORMAT_ERROR) {
+    printError = tr(STR_PRINTER_BAD_FORMAT);
+  } else {
+    printError = tr(STR_PRINTER_INCOMPLETE);
+  }
+  LOG_INF("PRINT", "Print failed: status=0x%04x, %s", status, printError);
+  renewTimeout();
+  renderer.clearScreen();
+  renderPrintStatus(tr(STR_PRINTER_PRINT_FAILED), printError, false);
+}
+
+void PrinterActivity::renderPrintStatus(const char* title, const char* detail, bool receiving) const {
+  const int width = renderer.getScreenWidth();
+  const int height = renderer.getScreenHeight();
+  renderer.drawCenteredText(UI_12_FONT_ID, height / 3, title, true, EpdFontFamily::BOLD);
+  UITheme::drawCenteredWrappedText(renderer, Rect{24, height / 3 + 50, width - 48, height / 3}, UI_10_FONT_ID, detail,
+                                   5);
+  if (!receiving) drawTimeout();
+  const auto labels = mappedInput.mapLabels(receiving ? tr(STR_CANCEL) : tr(STR_BACK),
+                                            receiving ? "" : tr(STR_PRINTER_RESET_TIMER), "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  displayPrintBuffer();
+}
+
+void PrinterActivity::displayPrintBuffer() const {
+  if (sink && sink->finishPreview()) {
+    // Decoding has stopped and the caller holds RenderLock. Complete the last
+    // provisional waveform, then replace its uncertain baseline and all panel
+    // pixels with the stable frame. HAL HALF forces X3 resync + conditioning.
+    renderer.waitRefreshComplete();
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  } else {
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  }
+}
+
 void PrinterActivity::updateNetwork() {
   const unsigned long now = millis();
   if (now - lastNetworkCheck < 1000) return;
@@ -337,6 +417,7 @@ void PrinterActivity::updateNetwork() {
   if (!connected) {
     if (networkReady) {
       LOG_INF("PRINT", "Network lost; waiting for reconnect");
+      closeClients();
       server.end();
       serverStarted = false;
       MDNS.end();
@@ -351,6 +432,7 @@ void PrinterActivity::updateNetwork() {
   const IPAddress ip = isApMode ? WiFi.softAPIP() : WiFi.localIP();
   if (networkReady && netIp == ip.toString().c_str()) return;
   updateAddress();
+  closeClients();
   server.end();
   server.begin(IPP_PORT);
   server.setNoDelay(true);
@@ -425,7 +507,7 @@ void PrinterActivity::loop() {
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
     // Back steps out one level: from a printout back to the printer screen,
     // and only from the printer screen out to home.
-    if (state == PrinterState::PAGE_SHOWING) {
+    if (state == PrinterState::PAGE_SHOWING || state == PrinterState::PRINT_FAILED) {
       state = PrinterState::RUNNING;
       requestUpdate();
     } else {
@@ -460,27 +542,8 @@ void PrinterActivity::loop() {
     showQueueEntry(queueIndex < 0 ? static_cast<int>(queue.size()) - 1 : queueIndex);
     return;
   }
-  if (!networkReady) return;
-  NetworkClient client = server.accept();
-  if (client) {
-    LOG_DBG("PRINT", "client connected");
-    client.setNoDelay(true);
-    WiFiClientTransport transport(client, mappedInput);
-    // An open print dialog must not monopolize the loop with keep-alive probes.
-    // Finish the request, advertise Connection: close, then service the timer.
-    connection->serve(transport, upTimeSeconds, false);
-    if (transport.userActivity) {
-      renewTimeout();
-      requestUpdate();
-    }
-    client.stop();
-    LOG_DBG("PRINT", "client done, free heap: %d", ESP.getFreeHeap());
-    if (transport.backPressed) {
-      onGoHome(HomeMenuItem::PRINTER);
-    } else if (transport.clearPressed) {
-      clearJob();
-    }
-  }
+  lock.unlock();
+  if (networkReady) pollClients();
 }
 
 void PrinterActivity::loadQueue() {
@@ -508,19 +571,20 @@ void PrinterActivity::loadQueue() {
   LOG_DBG("PRINT", "Queue: %d printout(s)", static_cast<int>(queue.size()));
 }
 
-void PrinterActivity::savePageToQueue() {
+bool PrinterActivity::savePageToQueue() {
   char path[64];
   snprintf(path, sizeof(path), "%s/print-%lu.bmp", QUEUE_DIR, millis());
   // The shown page IS the framebuffer, so the screenshot writer does the work.
   if (!ScreenshotUtil::saveFramebufferAsBmp(path, renderer.getFrameBuffer(), renderer.getDisplayWidth(),
                                             renderer.getDisplayHeight())) {
     LOG_ERR("PRINT", "Save failed: %s", path);
-    return;
+    return false;
   }
   const char* slash = strrchr(path, '/');
   queue.push_back(slash ? slash + 1 : path);
   queueIndex = static_cast<int>(queue.size()) - 1;
   LOG_DBG("PRINT", "Saved %s (queue: %d)", path, static_cast<int>(queue.size()));
+  return true;
 }
 
 void PrinterActivity::showQueueEntry(const int index) {
@@ -547,6 +611,7 @@ void PrinterActivity::showQueueEntry(const int index) {
   file.close();
 
   state = PrinterState::PAGE_SHOWING;
+  pageSaved = true;
   drawPageHints();
 }
 
@@ -569,6 +634,10 @@ void PrinterActivity::drawTimeout() const {
   const int y = renderer.getScreenHeight() - metrics.buttonHintsHeight - lineHeight - 12;
   renderer.fillRect(0, y - 4, width, lineHeight + 12, false);
   char text[96];
+  if (state == PrinterState::PAGE_SHOWING && !pageSaved) {
+    renderer.fillRect(0, y - lineHeight - 8, width, lineHeight + 4, false);
+    renderer.drawCenteredText(SMALL_FONT_ID, y - lineHeight - 6, tr(STR_PRINTER_SAVE_FAILED));
+  }
   snprintf(text, sizeof(text), tr(STR_PRINTER_TIMEOUT_FORMAT),
            static_cast<unsigned>(idleTimer.remainingMinutes(millis())));
   renderer.drawCenteredText(SMALL_FONT_ID, y, text);
@@ -668,6 +737,8 @@ void PrinterActivity::renderWaitingScreen() const {
 }
 
 void PrinterActivity::render(RenderLock&&) {
+  // The transfer owns the live framebuffer until page completion or failure.
+  if (state == PrinterState::RECEIVING) return;
   if (state != PrinterState::PAGE_SHOWING) renderer.clearScreen();
   switch (state) {
     case PrinterState::MODE_SELECT:
@@ -688,6 +759,10 @@ void PrinterActivity::render(RenderLock&&) {
       drawTimeout();
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
       break;
+    case PrinterState::PRINT_FAILED:
+      renderPrintStatus(tr(STR_PRINTER_PRINT_FAILED), printError, false);
+      break;
+    case PrinterState::RECEIVING:
     case PrinterState::WIFI_SELECTING:
       break;
     case PrinterState::FAILED:

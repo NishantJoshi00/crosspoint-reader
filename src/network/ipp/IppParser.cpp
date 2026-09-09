@@ -34,7 +34,7 @@ bool skipBytes(IppBodyReader& body, size_t len) {
 
 }  // namespace
 
-bool IppParser::parse(IppBodyReader& body, IppRequest& out) {
+bool IppParser::parse(IppBodyReader& body, IppRequest& out, IppRequestObserver* observer) {
   uint8_t hdr[8];
   if (!body.readExact(hdr, 8)) return false;
   out.verMajor = hdr[0];
@@ -42,6 +42,7 @@ bool IppParser::parse(IppBodyReader& body, IppRequest& out) {
   out.operationId = static_cast<uint16_t>((hdr[2] << 8) | hdr[3]);
   out.requestId = (static_cast<uint32_t>(hdr[4]) << 24) | (static_cast<uint32_t>(hdr[5]) << 16) |
                   (static_cast<uint32_t>(hdr[6]) << 8) | static_cast<uint32_t>(hdr[7]);
+  if (observer) observer->onRequestStarted(out.operationId);
 
   // Attribute groups: delimiter tags 0x00-0x0F, value tags 0x10+. We track the
   // current attribute name to capture the few we care about, and treat

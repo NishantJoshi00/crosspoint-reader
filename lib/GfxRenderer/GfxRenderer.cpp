@@ -1555,6 +1555,14 @@ void GfxRenderer::displayBufferAsync(const HalDisplay::RefreshMode refreshMode) 
 
 void GfxRenderer::waitRefreshComplete() const { display.waitRefreshComplete(); }
 
+void GfxRenderer::displayBufferPreview() const {
+  if (fadingFix) {
+    display.displayBuffer(HalDisplay::FAST_REFRESH, true);
+  } else {
+    display.displayBufferPreview();
+  }
+}
+
 bool GfxRenderer::supportsAsyncRefresh() const { return !fadingFix && display.supportsAsyncRefresh(); }
 
 size_t GfxRenderer::readFramebufferRegion(int x, int y, int w, int h, uint8_t* dst, size_t dstCapacity) const {

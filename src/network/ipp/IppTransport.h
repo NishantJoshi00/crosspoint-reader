@@ -28,6 +28,8 @@ class IppByteReader {
  public:
   explicit IppByteReader(IppTransport& io) : io(io) {}
 
+  bool hasBufferedData() const { return pos < fill; }
+
   // Returns -1 on EOF/error, else 0..255.
   int readByte() {
     if (pos >= fill) {

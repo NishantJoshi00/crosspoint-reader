@@ -45,6 +45,12 @@ class HalDisplay {
   // baseline before the next differential update (the tiled grayscale cleanup
   // does). Panels without deferral fall back to a blocking refresh.
   void displayBufferAsync(RefreshMode mode = RefreshMode::FAST_REFRESH);
+  // Disposable progressive preview. X3 may keep building the framebuffer while
+  // the waveform runs, accepting a temporarily inaccurate differential baseline.
+  // Before showing a finished page or an error, freeze writes, call
+  // waitRefreshComplete(), then displayBuffer(HALF_REFRESH) to force a resync.
+  // Other panels and inverted display paths use a blocking preview.
+  void displayBufferPreview();
   // Block until a pending deferred refresh completes (no-op when none is).
   void waitRefreshComplete();
   // True when displayBufferAsync() genuinely overlaps (panel driver defers);

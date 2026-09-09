@@ -27,8 +27,8 @@ condition caused the reported idle print failure is not yet established.
   Valid clock readings do not cause repeated automatic syncs or settings writes.
 - Printer mode uses the configured sleep timeout, starting when the service is
   ready. The countdown shows remaining minutes, rounded up, and refreshes once a
-  minute. The mapped Confirm button is labeled "Reset timer". Button presses and
-  completed pages renew the timer. Discovery requests do not.
+  minute. The mapped Confirm button is labeled "Reset". Button presses and
+  print results renew the timer. Discovery requests do not.
 - Timer expiry shows "Printer asleep", explains that Wi-Fi is off, and tells the
   user to wake with Power and reopen Printer. This screen takes priority over the
   selected sleep artwork for this timeout. The normal deep-sleep path tears down
@@ -38,11 +38,34 @@ condition caused the reported idle print failure is not yet established.
 - While ready, printer mode disables radio sleep and uses the normal 10 ms loop
   delay. Wi-Fi sleep settings are restored on exit. Incoming page decoding and
   countdown rendering share the render lock. A transfer can finish before the
-  idle timeout is evaluated again.
-- Each printer HTTP response advertises `Connection: close` so persistent
-  discovery traffic cannot hold the main loop and freeze the countdown. A full
-  print request finishes before the connection closes. The host harness retains
-  its default support for persistent connections.
+  idle timeout is evaluated again. Transfers stop after 15 seconds without data
+  or two minutes total, with a visible explanation.
+- Up to three HTTP connections retain their own read-ahead buffers. Idle sockets
+  never enter a blocking read. Each ready socket handles one request per turn,
+  preserving keep-alive and pipelining while yielding to input, redraws and the
+  idle timer. Sockets expire after 15 seconds of inactivity.
+- A Print-Job header immediately displays "Receiving print", before attributes
+  or raster decoding. Discovery does not repaint the screen. The finished page
+  is displayed synchronously before saving to SD or draining any trailing body.
+  Decode failures, interrupted transfers, timeouts and cancellation are visible.
+  Back during a print cancels and stays in Printer; if the page has already
+  completed, it remains visible. SD save failure is shown beside the countdown.
+  Long prints show at most three previews near 25%, 50% and 75%, at least two
+  seconds apart. Fast prints skip previews. The preview percentage measures
+  decoded image rows. Its temporary Receiving footer sits below those rows and
+  is removed from RAM immediately after sending, so the saved BMP stays clean.
+  There are no per-row refreshes or extra image buffers.
+- X3 previews may continue decoding into the framebuffer while the panel runs
+  its refresh waveform. The driver's later read of that live buffer can make
+  its retained differential baseline disagree with the visible preview; those
+  temporary glitches are accepted. This behavior has an explicit preview API;
+  the ordinary async API still requires a stable framebuffer. Other panels,
+  inverted displays and the fading-fix path use blocking previews.
+- After any preview, both completion and failure stop framebuffer writes, finish
+  the pending waveform, and use a HALF refresh. On X3 the HAL turns this into a
+  forced resync with conditioning, replacing the uncertain baseline and showing
+  the stable final image or failure message. Jobs with no preview keep the fast
+  completion path. No glitch pixels are added to the image data.
 - Network loss replaces the ready screen with a reconnecting message. On
   reconnection, the listener, address and discovery advertisement are refreshed.
   Discovery failure leaves the direct printer address visible. Startup failure
@@ -60,7 +83,19 @@ and IPP code, verifying that a completed response releases the timed session.
 It also verifies that a fragmented print request produces all expected pixels
 before the connection closes, and that long attribute names do not misalign the
 next IPP attribute.
+The firmware client-session transport is also tested with controlled sockets
+and input. Cases include an idle discovery socket beside a ready print socket,
+pipelined requests already in the read-ahead buffer, chunked bodies and the
+100-continue handshake, receiving notification before decode, short sender
+pauses, early decode failures, buffered bytes after disconnect, a finished page
+before a missing HTTP tail, Back during cleanup, latched cancellation, and idle
+and total transfer limits. Printing tests run without button input.
 The CI unit-test job runs this suite.
+
+Preview tests cover the three-refresh budget, two-second spacing, row progress,
+fast-job suppression, cancellation cleanup, a new job after cancellation, and
+millisecond-counter wrap. Host tests cannot establish the visual effect or
+physical refresh quality on a panel.
 
 Build the X3/X4 firmware with `pio run -e default`.
 
@@ -68,22 +103,34 @@ Verified on 2026-09-07: the X3/X4 build, clock/timer/protocol regressions, full
 repository formatting, whitespace, and strict static-analysis checks pass.
 Printer buffers are explicitly initialized, and the parser consumes excess
 attribute-name bytes through the same zero-length-safe path as shorter names.
-The firmware has not been flashed. Battery current and the original idle-print
-failure have not been verified on hardware.
+The user reported the same receive/Back problem after installing PR #7. Source
+inspection established missing receiving feedback, serial handling of idle
+connections, deferred failure renders, and abort-and-exit behavior during a
+transfer. The exact on-device cause has not been reproduced. These host tests
+exercise the changed transport and protocol; they do not validate the physical
+panel, radio timing, or battery current.
 
-Device checks remain necessary. There was no X3 connected during development:
+The follow-up firmware has not been flashed. The user requested no further
+reader access. A diagnostic connection during investigation unexpectedly reset
+the attached X3 and identified build dd31c61e; no hardware testing followed.
+
+Device checks remain necessary when the user chooses to install the follow-up:
 
 1. Set Time to sleep to two minutes. In both Join Network and Create Hotspot,
    wait at least a minute without touching the reader, then print. The first
-   page must arrive without a button press and renew the countdown.
-2. Let the countdown decrease and press the button labeled Reset timer. It must
+   receiving message must appear without a button press, followed automatically
+   by the page. Completion must renew the countdown.
+   With a slow print, verify the progressive previews and final resync. Compare
+   the saved BMP with the intended image; no preview label should be saved.
+2. Let the countdown decrease and press the button labeled Reset. It must
    return to two minutes. Repeat while viewing a stored page.
 3. Leave the computer's print dialog open so discovery continues. Let the timer
    expire. Check the Printer asleep screen, radio shutdown, deep sleep, and wake
    instructions. Repeat with Quick Resume selected to check screen precedence.
 4. Start a large print just before expiry. Let it finish and confirm that
-   completed pages renew the timer. Abort a transfer with Left and verify that
-   the printer remains responsive.
+   completed pages renew the timer. Cancel a transfer with Back and verify that
+   Printer stays open with a cancellation message. Back during trailing network
+   cleanup must leave the already completed page visible.
 5. Disconnect and restore the joined network. Confirm the visible status and
    successful printing after reconnection, including a changed DHCP address.
 6. Sync the clock, disconnect Wi-Fi, then read and sleep offline. Memento Mori

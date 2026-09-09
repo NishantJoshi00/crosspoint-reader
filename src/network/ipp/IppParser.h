@@ -18,9 +18,17 @@ struct IppRequest {
   bool parseOk = false;
 };
 
+class IppRequestObserver {
+ public:
+  virtual ~IppRequestObserver() = default;
+  // Called as soon as the operation header arrives, before attributes or raster data.
+  virtual void onRequestStarted(uint16_t operationId) = 0;
+  virtual void onRequestFinished(uint16_t operationId, uint16_t status) = 0;
+};
+
 class IppParser {
  public:
   // Returns false on malformed stream / transport error. On success `out` is
   // filled and `body` is positioned at the document data.
-  static bool parse(IppBodyReader& body, IppRequest& out);
+  static bool parse(IppBodyReader& body, IppRequest& out, IppRequestObserver* observer = nullptr);
 };

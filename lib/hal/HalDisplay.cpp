@@ -73,6 +73,17 @@ void HalDisplay::displayBufferAsync(HalDisplay::RefreshMode mode) {
   einkDisplay.displayBufferAsyncNoShadow(convertRefreshMode(mode));
 }
 
+void HalDisplay::displayBufferPreview() {
+  if (gpio.deviceIsX3() && einkDisplay.supportsAsyncRefresh()) {
+    // Deliberately relax the no-shadow buffer lifetime only for temporary X3
+    // previews. Its finish step re-reads the live frame into DTM1, so subsequent
+    // previews can glitch. The caller must end with a stable HALF resync.
+    einkDisplay.displayBufferAsyncNoShadow(EInkDisplay::FAST_REFRESH);
+  } else {
+    einkDisplay.displayBuffer(EInkDisplay::FAST_REFRESH);
+  }
+}
+
 void HalDisplay::waitRefreshComplete() { einkDisplay.waitRefreshComplete(); }
 
 bool HalDisplay::supportsAsyncRefresh() const { return einkDisplay.supportsAsyncRefresh(); }
