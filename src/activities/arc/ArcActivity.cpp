@@ -300,7 +300,10 @@ void ArcActivity::loop() {
 }
 
 int ArcActivity::cellSize() const {
-  return std::max(1, std::min((renderer.getScreenWidth() - 16) / 64, (renderer.getScreenHeight() - 220) / 64));
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int footer = 80 + metrics.buttonHintsHeight + metrics.verticalSpacing;
+  return std::max(
+      1, std::min((renderer.getScreenWidth() - 16) / 64, (renderer.getScreenHeight() - boardTop() - footer) / 64));
 }
 
 int ArcActivity::boardTop() const { return UITheme::getInstance().getMetrics().topPadding + 100; }
