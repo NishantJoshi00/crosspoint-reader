@@ -48,6 +48,8 @@ class HomeActivity final : public Activity {
     ++i;
     if (item == HomeMenuItem::RNG) return i;
     ++i;
+    if (item == HomeMenuItem::ARC) return i;
+    ++i;
     if (item == HomeMenuItem::PRINTER) return i;
     ++i;
     if (item == HomeMenuItem::SETTINGS_MENU) return i;
@@ -63,6 +65,7 @@ class HomeActivity final : public Activity {
     if (idx == i++) return HomeMenuItem::FILE_TRANSFER;
     if (idx == i++) return HomeMenuItem::QR_CODES;
     if (idx == i++) return HomeMenuItem::RNG;
+    if (idx == i++) return HomeMenuItem::ARC;
     if (idx == i++) return HomeMenuItem::PRINTER;
     if (idx == i) return HomeMenuItem::SETTINGS_MENU;
     return HomeMenuItem::NONE;
@@ -74,6 +77,7 @@ class HomeActivity final : public Activity {
   void onFileTransferOpen();
   void onQrCodesOpen();
   void onRngOpen();
+  void onArcOpen();
   void onPrinterOpen();
   void onOpdsBrowserOpen();
 

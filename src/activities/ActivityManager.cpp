@@ -6,6 +6,7 @@
 #include <algorithm>
 
 #include "OpdsServerStore.h"
+#include "arc/ArcActivity.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
 #include "browser/OpdsBookBrowserActivity.h"
@@ -196,6 +197,8 @@ void ActivityManager::goToFileTransfer() {
 void ActivityManager::goToQrCodes() { replaceActivity(std::make_unique<QrMenuActivity>(renderer, mappedInput)); }
 
 void ActivityManager::goToRng() { replaceActivity(std::make_unique<RngActivity>(renderer, mappedInput)); }
+
+void ActivityManager::goToArc() { replaceActivity(std::make_unique<ArcActivity>(renderer, mappedInput)); }
 
 void ActivityManager::goToPrinter() { replaceActivity(std::make_unique<PrinterActivity>(renderer, mappedInput)); }
 

@@ -1,0 +1,22 @@
+{
+  "name": "ArcPlayer",
+  "version": "1.0.0",
+  "description": "ARC game packs, native graphics and embedded bytecode runtime",
+  "build": {
+    "srcDir": ".",
+    "includeDir": ".",
+    "flags": [
+      "-Ivendor/micropython",
+      "-Ivendor/ulab",
+      "-Iport",
+      "-ffp-contract=off"
+    ],
+    "srcFilter": [
+      "+<*.cpp>",
+      "+<vendor/micropython/py/*.c>",
+      "+<vendor/micropython/shared/runtime/gchelper_generic.c>",
+      "+<vendor/ulab/>",
+      "-<vendor/ulab/numpy/io/>"
+    ]
+  }
+}

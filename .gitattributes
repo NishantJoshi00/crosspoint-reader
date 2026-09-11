@@ -1,0 +1,2 @@
+lib/ArcPlayer/vendor/** linguist-vendored whitespace=-blank-at-eol,-blank-at-eof
+tools/arc/patches/*.patch whitespace=-blank-at-eol

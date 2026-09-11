@@ -150,6 +150,44 @@ jobs:
       - name: Test offline clock and printer timeout
         run: sh test/power_clock/run.sh
 
+  arc-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install 32-bit host compiler
+        run: sudo apt-get update && sudo apt-get install -y gcc-multilib g++-multilib
+      - name: Build pinned bytecode tools and native player
+        run: |
+          python tools/arc/bootstrap.py --no-host
+          python -m pip install .cache/arc/upstream/engine
+          python tools/arc/build_native.py --word-size 32
+      - name: Verify runtime primitives
+        run: python tools/arc/verify_primitives.py --mpy-cross .cache/arc/upstream/micropython/mpy-cross/build/mpy-cross
+      - name: Build public game packs and compare every level
+        run: |
+          python tools/arc/prepare.py
+          python tools/arc/compile.py --sources .cache/arc/sources --engine .cache/arc/upstream/engine/arcengine --output .cache/arc/embedded --lazy
+          python tools/arc/pack.py --embedded .cache/arc/embedded --sources .cache/arc/sources --mpy-cross .cache/arc/upstream/micropython/mpy-cross/build/mpy-cross --output .cache/arc/packs
+          python tools/arc/verify.py
+      - name: Measure a constrained 32-bit heap
+        # Informational until actual X3 heap availability has been measured.
+        continue-on-error: true
+        run: python tools/arc/verify.py --heap 262144 --logs .cache/arc/memory-256k
+      - name: Upload compatibility and memory results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: arc-runtime-checks
+          path: |
+            .cache/arc/verification
+            .cache/arc/memory-256k
+            .cache/arc/packs
+            tools/arc/licenses
+            lib/ArcPlayer/THIRD_PARTY_NOTICES.md
+
   # This job is used as the PR required actions check, allows for changes to other steps in the future without breaking
   # PR requirements.
   test-status:
@@ -159,6 +197,7 @@ jobs:
       - clang-format
       - cppcheck
       - unit-tests
+      - arc-runtime
     if: always()
     runs-on: ubuntu-latest
     steps:

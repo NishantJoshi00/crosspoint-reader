@@ -25,6 +25,7 @@ enum class HomeMenuItem {
   FILE_TRANSFER,
   QR_CODES,
   RNG,
+  ARC,
   PRINTER,
   SETTINGS_MENU
 };
@@ -95,6 +96,7 @@ class ActivityManager {
   void goToFileTransfer();
   void goToQrCodes();
   void goToRng();
+  void goToArc();
   void goToPrinter();
   void goToSettings();
   void goToFileBrowser(std::string path = {});
