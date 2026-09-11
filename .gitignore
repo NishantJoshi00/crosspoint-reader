@@ -32,3 +32,6 @@ lib/EpdFont/scripts/output/
 /sdkconfig.default
 /sdkconfig.defaults
 sdkconfig.sticky
+
+# Pinned MicroPython embedding headers are part of the firmware sources.
+!lib/ArcPlayer/vendor/micropython/genhdr/*.generated.h

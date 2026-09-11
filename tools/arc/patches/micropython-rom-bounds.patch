@@ -1,0 +1,10 @@
+--- a/py/reader.c
++++ b/py/reader.c
+@@ -75,6 +75,7 @@
+     if (m->free_len != MP_READER_IS_ROM) {
+         return NULL;
+     }
++    if (len > (size_t)(m->end - m->cur)) mp_raise_ValueError(MP_ERROR_TEXT("Truncated bytecode"));
+     const uint8_t *data = m->cur;
+     m->cur += len;
+     return data;

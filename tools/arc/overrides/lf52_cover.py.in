@@ -1,0 +1,32 @@
+# Iterative form of LF52's source-pinned depth-first exact-cover search.
+# The candidate order and pruning are unchanged; only the call stack is explicit.
+# Copyright (c) 2026 ARC Prize Foundation. See ../licenses/ARCEngine.txt.
+def sonequovgs(edzscmpzvd, kbmqqxzvjy):
+    nonlocal best
+    stack = [(kbmqqxzvjy, None)]
+    while stack:
+        remaining, candidates = stack[-1]
+        if candidates is None:
+            if best is not None and len(edzscmpzvd) >= len(best):
+                stack.pop()
+                if edzscmpzvd:
+                    edzscmpzvd.pop()
+                continue
+            if not remaining:
+                best = edzscmpzvd.copy()
+                stack.pop()
+                if edzscmpzvd:
+                    edzscmpzvd.pop()
+                continue
+            item = min(remaining, key=lambda value: len(tfomxkervo[value]))
+            candidates = iter(sorted(tfomxkervo[item], key=lambda i: len(khvyoqgyyt[i]), reverse=True))
+            stack[-1] = (remaining, candidates)
+        try:
+            choice = next(candidates)
+        except StopIteration:
+            stack.pop()
+            if edzscmpzvd:
+                edzscmpzvd.pop()
+            continue
+        edzscmpzvd.append(choice)
+        stack.append((remaining - khvyoqgyyt[choice], None))

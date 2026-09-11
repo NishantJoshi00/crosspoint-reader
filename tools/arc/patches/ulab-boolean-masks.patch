@@ -1,0 +1,100 @@
+--- a/code/ndarray.c
++++ b/code/ndarray.c
+@@ -1002,7 +1002,7 @@
+ }
+ 
+ void ndarray_assign_view(ndarray_obj_t *view, ndarray_obj_t *values) {
+-    if(values->len == 0) {
++    if((view->ndim > 0 && view->len == 0) || values->len == 0) {
+         return;
+     }
+     uint8_t ndim = 0;
+@@ -1215,9 +1215,74 @@
+     return MP_OBJ_FROM_PTR(ndarray);
+ }
+ 
++// ARC extension: full-shape Boolean masks, including strided 2D views.
++static uint8_t *arc_linear_ptr(ndarray_obj_t *a, size_t n) {
++    int32_t offset = 0;
++    for(int d = ULAB_MAX_DIMS - 1; d >= ULAB_MAX_DIMS - a->ndim; --d) {
++        offset += (n % a->shape[d]) * a->strides[d];
++        n /= a->shape[d];
++    }
++    return (uint8_t *)a->array + offset;
++}
++
++static mp_obj_t arc_boolean_mask(ndarray_obj_t *a, ndarray_obj_t *mask, ndarray_obj_t *values) {
++    if(a->ndim != mask->ndim) {
++        mp_raise_msg(&mp_type_IndexError, MP_ERROR_TEXT("Boolean mask shape mismatch"));
++    }
++    for(int d = ULAB_MAX_DIMS - a->ndim; d < ULAB_MAX_DIMS; ++d) {
++        if(a->shape[d] != mask->shape[d]) {
++            mp_raise_msg(&mp_type_IndexError, MP_ERROR_TEXT("Boolean mask shape mismatch"));
++        }
++    }
++    size_t count = 0;
++    for(size_t n = 0; n < mask->len; ++n) count += *arc_linear_ptr(mask, n) != 0;
++    ndarray_obj_t *result;
++    if(values == NULL) {
++        result = ndarray_new_linear_array(count, a->dtype);
++    } else {
++        if(values->len != 1 && (values->len != count || (count != 0 && values->ndim != 1))) {
++            mp_raise_ValueError(MP_ERROR_TEXT("Boolean mask assignment length mismatch"));
++        }
++        result = ndarray_copy_view_convert_type(values, a->dtype);
++    }
++    size_t cursor = 0;
++    for(size_t n = 0; n < mask->len; ++n) {
++        if(*arc_linear_ptr(mask, n)) {
++            uint8_t *value = (uint8_t *)result->array + cursor * a->itemsize;
++            if(values == NULL) memcpy(value, arc_linear_ptr(a, n), a->itemsize);
++            else memcpy(arc_linear_ptr(a, n), value, a->itemsize);
++            if(values == NULL || values->len != 1) ++cursor;
++        }
++    }
++    return MP_OBJ_FROM_PTR(values == NULL ? result : a);
++}
++
++static mp_obj_t arc_integer_index(ndarray_obj_t *a, ndarray_obj_t *index, ndarray_obj_t *values) {
++    if(a->ndim != 1 || index->ndim != 1 || index->dtype == NDARRAY_FLOAT || index->dtype == 'c') {
++        mp_raise_msg(&mp_type_IndexError, MP_ERROR_TEXT("Expected 1D integer indices"));
++    }
++    if(values && values->len != 1 && values->len != index->len) {
++        mp_raise_ValueError(MP_ERROR_TEXT("Indexed assignment length mismatch"));
++    }
++    ndarray_obj_t *result = values ? ndarray_copy_view_convert_type(values, a->dtype) : ndarray_new_linear_array(index->len, a->dtype);
++    for(size_t n = 0; n < index->len; ++n) {
++        int pos = mp_obj_get_int(ndarray_get_item(index, arc_linear_ptr(index, n)));
++        if(pos < 0) pos += a->len;
++        if(pos < 0 || (size_t)pos >= a->len) mp_raise_msg(&mp_type_IndexError, MP_ERROR_TEXT("Array index out of bounds"));
++        uint8_t *value = (uint8_t *)result->array + (values && values->len == 1 ? 0 : n) * a->itemsize;
++        if(values) memcpy(arc_linear_ptr(a, pos), value, a->itemsize);
++        else memcpy(value, arc_linear_ptr(a, pos), a->itemsize);
++    }
++    return MP_OBJ_FROM_PTR(values ? a : result);
++}
++
+ static mp_obj_t ndarray_get_slice(ndarray_obj_t *ndarray, mp_obj_t index, ndarray_obj_t *values) {
+     if(mp_obj_is_type(index, &ulab_ndarray_type)) {
+         ndarray_obj_t *nindex = MP_OBJ_TO_PTR(index);
++        if(!nindex->boolean) return arc_integer_index(ndarray, nindex, values);
++        if(nindex->ndim > 1 && nindex->boolean) {
++            return arc_boolean_mask(ndarray, nindex, values);
++        }
+         if((nindex->ndim > 1) || (nindex->boolean == false)) {
+             mp_raise_NotImplementedError(MP_ERROR_TEXT("operation is implemented for 1D Boolean arrays only"));
+         }
+@@ -1549,6 +1614,13 @@
+ 
+ #if NDARRAY_HAS_BINARY_OPS || NDARRAY_HAS_INPLACE_OPS
+ mp_obj_t ndarray_binary_op(mp_binary_op_t _op, mp_obj_t lobj, mp_obj_t robj) {
++    if(_op == MP_BINARY_OP_CONTAINS) {
++        ndarray_obj_t *a = MP_OBJ_TO_PTR(lobj);
++        for(size_t n = 0; n < a->len; ++n) {
++            if(mp_obj_equal(ndarray_get_item(a, arc_linear_ptr(a, n)), robj)) return mp_const_true;
++        }
++        return mp_const_false;
++    }
+     // TODO: implement in-place operators
+     // if the ndarray stands on the right hand side of the expression, simply swap the operands
+     ndarray_obj_t *lhs, *rhs;
