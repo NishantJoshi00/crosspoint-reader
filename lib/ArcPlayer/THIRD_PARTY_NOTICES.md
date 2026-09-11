@@ -6,7 +6,7 @@ player for this firmware fork, not an ARC Prize product.
 | Component | Source | Revision | Changes |
 | --- | --- | --- | --- |
 | ARCEngine 0.9.3 | https://github.com/arcprize/ARCEngine | b495c6acaf253c9681cd7b75c4299d352e9ce6f8 | SDK lowering, native raster/collision/camera paths, lightweight data classes, lazy levels |
-| Public ARC-AGI-3 games | URLs and SHA-256 in `tools/arc/sources.json` | 25 pinned versions | Portable bytecode; compact constant grids and undo storage; native affine raster tails in BP35/LF52 |
+| Public ARC-AGI-3 games | URLs and SHA-256 in `tools/arc/sources.json` | 25 pinned versions | Portable bytecode; compact constant grids and undo storage; native affine raster tails in BP35/LF52; iterative LF52 cover search |
 | MicroPython 1.27.0 | https://github.com/micropython/micropython | 78ff170de9e32c79db6e64d3e33d2bd60002bdcd | Embedded port, ordered dictionaries, bounded ROM reader; patches in `tools/arc/patches` |
 | ulab | https://github.com/v923z/micropython-ulab | 01ad8a5fff89d7aeb68ef1827d1ba8f83f6462a7 | Boolean masks, integer indexing, membership and empty-slice fixes |
 

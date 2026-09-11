@@ -82,6 +82,10 @@ capacity. A second, informational run measures a 256 KiB heap. The X3's availabl
 contiguous heap must still be measured on hardware; neither host budget is a
 claim about the device. On the 64-bit host, BP35 and LF52 require substantially
 more memory than the smaller games, including failures in a 512 KiB BP35 probe.
+The initial 32-bit run measured up to 456 KiB of live VM data, before system
+overhead, so the largest levels require further memory work for the X3. LF52's
+recursive cover search is lowered to the same ordered search with an explicit
+stack to respect the device's call-stack limit.
 **All-game playability on the X3 is not yet established.**
 
 ## Package for device testing

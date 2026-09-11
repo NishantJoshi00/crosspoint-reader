@@ -86,7 +86,8 @@ void ArcActivity::openGame(unsigned startLevel) {
   operation = command.operation;
   waiting = true;
   title = files[gameSelection].substr(0, files[gameSelection].find('-'));
-  for (char& character : title) character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
+  std::transform(title.begin(), title.end(), title.begin(),
+                 [](unsigned char character) { return static_cast<char>(std::toupper(character)); });
   screen = Screen::Loading;
   cursorX = cursorY = 31;
   confirmHeld = false;

@@ -162,8 +162,14 @@ def compact_grid(node):
     return ast.parse(f'_arc_native.matrix({raw!r}, {len(data)}, {len(data[0])})', mode='eval').body
 
 
-def lower(source, name, lazy=False, compact_grids=(), raster_tails=None, history=None):
+def lower(source, name, lazy=False, compact_grids=(), raster_tails=None, history=None, iterative_cover=False):
     tree = ast.parse(source)
+    if iterative_cover:
+        replacement = ast.parse((HERE / 'overrides/lf52_cover.py.in').read_text()).body[0]
+        matches = [node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == replacement.name]
+        if len(matches) != 1:
+            raise ValueError('Expected the pinned LF52 cover search')
+        matches[0].body = replacement.body
     # Only replace source-pinned vectorized raster tails. Bounds, pivot and
     # game-specific rotation fast paths remain in the original rule bytecode.
     for func in tree.body:
@@ -243,7 +249,7 @@ def compile_sources(source_dir, engine_dir, destination, lazy=False):
         data = (source_dir / (entry["id"] + ".py")).read_bytes()
         if hashlib.sha256(data).hexdigest() != entry["sha256"]:
             raise ValueError("Source digest mismatch: " + entry["id"])
-        (destination / (entry["id"].split("-")[0] + ".py")).write_text(lower(data.decode(), entry["id"], lazy, entry.get('compact_grids', ()), entry.get('raster_tails'), entry.get('history')))
+        (destination / (entry["id"].split("-")[0] + ".py")).write_text(lower(data.decode(), entry["id"], lazy, entry.get('compact_grids', ()), entry.get('raster_tails'), entry.get('history'), entry.get('iterative_cover', False)))
 
 
 if __name__ == "__main__":
